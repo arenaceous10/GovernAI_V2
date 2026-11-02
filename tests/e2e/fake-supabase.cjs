@@ -1,7 +1,7 @@
 // A small in-memory stand-in for Supabase's REST API (PostgREST), enough for GovernAI's cloud mode.
 // install(context, db) intercepts https://fake.supabase.co/rest/v1/*. db.fail controls injected failures.
 const HOST = 'https://fake.supabase.co';
-const newDb = () => ({ tables: { v2_products: [], v2_clients: [], v2_users: [], v2_audit: [], v2_settings: [] }, fail: null, nextId: 1, calls: [] });
+const newDb = () => ({ tables: { v2_products: [], v2_clients: [], v2_users: [], v2_audit: [], v2_settings: [] }, fail: null, nextId: 1, calls: [], files: {} });
 const KEYS = { v2_products: 'id', v2_clients: 'id', v2_users: 'id', v2_settings: 'key', v2_audit: 'id' };
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*', 'access-control-expose-headers': '*' };
 
@@ -18,7 +18,54 @@ function matches(row, params) {
   return true;
 }
 
-function install(context, db) {
+// supabase-js sends files as multipart form data; keep the file part like Supabase does.
+function parseUpload(buf, ct) {
+  const bm = ct.match(/boundary=(?:"([^"]+)"|([^;]+))/);
+  if (!/multipart/i.test(ct) || !bm) return { body: buf, type: ct || 'application/octet-stream' };
+  const parts = buf.toString('latin1').split('--' + (bm[1] || bm[2]));
+  for (const part of parts) {
+    const i = part.indexOf('\r\n\r\n'); if (i < 0) continue;
+    const head = part.slice(0, i); if (!/content-type/i.test(head)) continue;
+    const type = (head.match(/content-type:\s*([^\r\n]+)/i) || [])[1] || 'application/octet-stream';
+    return { body: Buffer.from(part.slice(i + 4).replace(/\r\n$/, ''), 'latin1'), type };
+  }
+  return { body: buf, type: 'application/octet-stream' };
+}
+
+// Storage: upload, signed link, download, delete for the evidence bucket.
+function installStorage(context, db) {
+  return context.route(`${HOST}/storage/v1/**`, async (route) => {
+    const req = route.request(); const url = new URL(req.url()); const method = req.method();
+    if (method === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS });
+    const p = decodeURIComponent(url.pathname.replace('/storage/v1/', ''));
+    db.calls.push(`${method} storage ${p}`);
+    if (db.failStorage) return route.fulfill({ status: 500, headers: CORS, contentType: 'application/json', body: JSON.stringify({ message: 'storage down' }) });
+    let m;
+    if (method === 'POST' && (m = p.match(/^object\/sign\/([^/]+)\/(.+)$/))) {
+      if (!db.files[m[2]]) return route.fulfill({ status: 404, headers: CORS, contentType: 'application/json', body: JSON.stringify({ message: 'Object not found' }) });
+      return route.fulfill({ status: 200, headers: CORS, contentType: 'application/json', body: JSON.stringify({ signedURL: `/object/sign/${m[1]}/${encodeURI(m[2])}?token=t` }) });
+    }
+    if (method === 'GET' && (m = p.match(/^object\/sign\/([^/]+)\/(.+)$/))) {
+      const f = db.files[m[2]];
+      return f ? route.fulfill({ status: 200, headers: CORS, contentType: f.type, body: f.body }) : route.fulfill({ status: 404, headers: CORS, body: 'missing' });
+    }
+    if (method === 'POST' && (m = p.match(/^object\/([^/]+)\/(.+)$/))) {
+      const f = parseUpload(req.postDataBuffer() || Buffer.from(''), req.headers()['content-type'] || '');
+      // Playwright cannot see file bodies inside multipart uploads; tests can supply contents by file name.
+      if (!f.body.length && db.fixtures) { const hit = Object.keys(db.fixtures).find((n) => m[2].endsWith(n)); if (hit) f.body = Buffer.from(db.fixtures[hit]); }
+      db.files[m[2]] = f;
+      return route.fulfill({ status: 200, headers: CORS, contentType: 'application/json', body: JSON.stringify({ Key: `${m[1]}/${m[2]}` }) });
+    }
+    if (method === 'DELETE' && (m = p.match(/^object\/([^/]+)$/))) {
+      const { prefixes = [] } = JSON.parse(req.postData() || '{}'); prefixes.forEach((k) => delete db.files[k]);
+      return route.fulfill({ status: 200, headers: CORS, contentType: 'application/json', body: '[]' });
+    }
+    return route.fulfill({ status: 404, headers: CORS, body: '' });
+  });
+}
+
+async function install(context, db) {
+  await installStorage(context, db);
   return context.route(`${HOST}/rest/v1/**`, async (route) => {
     const req = route.request(); const url = new URL(req.url()); const table = url.pathname.split('/').pop(); const method = req.method();
     if (method === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS });

@@ -22,6 +22,9 @@ portfolio of 8 products across 3 clients. Administrator > Settings > Reset to de
 - Tables are prefixed `v2_` (`supabase/migrations/001_governai_v2.sql`) and sit beside any other tables in the project.
 - **Demo access only:** there is no login yet, so row-level security lets the browser key read and write these tables.
   Keep sample data only until sign-in is added, then replace the `demo open access` policies with per-user rules.
+- Evidence files go to the private Storage bucket `v2-evidence` (`supabase/migrations/002_evidence_files.sql`), up to 10 MB
+  each, and open through a link that expires after 10 minutes. Replacing or removing evidence deletes the old file.
+  Browser-only mode keeps files up to 2 MB in the browser instead.
 - A save failure shows "Not saved" with a Retry button in the sidebar. Other people's changes appear when the tab regains focus.
 
 ## Deploy on Vercel
@@ -72,11 +75,13 @@ npm run build && npx vite preview --port 4173
 node tests/e2e/lifecycle.cjs               # landing, registration, all 10 stages, returns, override, incident, retirement
 node tests/e2e/drafts-reassess-mobile.cjs  # drafts, re-assessment, mobile layout
 node tests/e2e/random-clicks.cjs 7 3       # random clicks on every page for every role
+node tests/e2e/evidence.cjs                # upload, open as reviewer, replace, remove evidence files
 # Cloud mode, against an in-memory Supabase stand-in (tests/e2e/fake-supabase.cjs):
 VITE_SUPABASE_URL=https://fake.supabase.co VITE_SUPABASE_ANON_KEY=test npx vite build --outDir dist-cloudtest
 npx vite preview --outDir dist-cloudtest --port 4174
 node tests/e2e/cloud.cjs
 CLOUD=1 node tests/e2e/lifecycle.cjs
+CLOUD=1 node tests/e2e/evidence.cjs
 ```
 (e2e scripts need `npm i -D playwright`.)
 

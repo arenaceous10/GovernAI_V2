@@ -340,3 +340,8 @@ textarea.input { min-height: 92px; resize: vertical; }
 .sync i { width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
 .sync.warn i { background: var(--warn); } .sync.bad i { background: var(--bad); }
 .sync button { all: unset; cursor: pointer; text-decoration: underline; color: var(--accent-ink); }
+.ev-links { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin-top: 3px; min-width: 0; max-width: 100%; }
+.linkbtn { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; background: none; border: 0; padding: 0; color: var(--accent, #1E3A8A); font: inherit; cursor: pointer; text-decoration: none; overflow-wrap: anywhere; text-align: left; }
+.linkbtn:hover { text-decoration: underline; }
+.linkbtn svg { flex: none; }
+.btn.disabled { opacity: 0.55; pointer-events: none; }

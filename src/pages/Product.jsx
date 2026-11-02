@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ArrowLeft, ChevronDown, Download, Paperclip, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Download, ExternalLink, Link2, Loader2, Paperclip, RefreshCw, X } from 'lucide-react';
+import { uploadEvidence, evidenceUrl, removeEvidence, hasFile, isLink, fmtSize } from '../lib/files.js';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { TIERS, DOMAINS, SYSTEM_TYPES, SOURCING, PRINCIPLES } from '../data/frameworks.js';
 import { geoName } from '../data/countries.js';
@@ -16,30 +17,76 @@ import { useStore, stageBlockers, waitingOn, newStage } from '../store/store.jsx
 
 const label = (list, id) => list.find((x) => x.id === id)?.label || id || '—';
 
-function EvidenceItem({ item, value, editable, onSave }) {
+// Opens a stored file in a new tab. The tab is opened before the signed link is fetched so pop-up blockers allow it.
+async function openFile(v, setErr) {
+  setErr('');
+  const w = window.open('', '_blank');
+  try {
+    let url = await evidenceUrl(v);
+    if (url?.startsWith('data:')) url = URL.createObjectURL(await (await fetch(url)).blob());
+    if (w) w.location.href = url; else window.location.assign(url);
+  } catch (e) {
+    if (w) w.close();
+    setErr(e.message || 'Could not open the file.');
+  }
+}
+
+function EvidenceItem({ item, value, editable, onSave, systemId, stage }) {
   const [open, setOpen] = useState(false);
   const [ref, setRef] = useState(value?.ref || '');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
   const has = value && (value.ref || value.file);
+  const stored = hasFile(value);
+
+  const upload = async (f) => {
+    setBusy(true); setErr('');
+    try {
+      const up = await uploadEvidence(f, { systemId, stage });
+      if (value?.path && value.path !== up.path) removeEvidence(value);
+      onSave({ ref: ref.trim(), ...up, at: new Date().toISOString() });
+      setOpen(false);
+    } catch (e) {
+      setErr(e.message || 'Upload failed.');
+    } finally { setBusy(false); }
+  };
+  const saveLink = () => {
+    const keep = value && value.file ? { file: value.file, path: value.path, data: value.data, size: value.size, type: value.type } : { file: '' };
+    onSave({ ...keep, ref: ref.trim(), at: new Date().toISOString() });
+    setOpen(false);
+  };
+  const remove = () => { removeEvidence(value); onSave(null); };
+
   return (
     <div className="ev-row">
-      <div>
+      <div style={{ minWidth: 0 }}>
         <div>{item}</div>
-        {has && !open && <div className="xs mute" style={{ marginTop: 2 }}><Paperclip size={11} /> {value.file || value.ref}</div>}
-        {open && (
-          <div className="row" style={{ marginTop: 8 }}>
-            <input className="input" style={{ flex: 1, minWidth: 200 }} aria-label={`Link or document name for ${item}`} value={ref} onChange={(e) => setRef(e.target.value)} placeholder="Link or document name" />
-            <label className="btn sm" style={{ cursor: 'pointer' }}>Upload file
-              <input type="file" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) { onSave({ ref, file: f.name }); setOpen(false); } e.target.value = ''; }} />
-            </label>
-            <button type="button" className="btn primary sm" disabled={!ref.trim()} onClick={() => { onSave({ ref: ref.trim(), file: value?.file || '' }); setOpen(false); }}>Save</button>
-            <button type="button" className="btn ghost sm" onClick={() => setOpen(false)}>Cancel</button>
+        {has && !open && (
+          <div className="ev-links">
+            {value.file && (stored
+              ? <button type="button" className="linkbtn xs" onClick={() => openFile(value, setErr)} title="Open file"><Paperclip size={11} /> {value.file}{value.size ? <span className="mute"> · {fmtSize(value.size)}</span> : null} <ExternalLink size={11} /></button>
+              : <span className="xs mute"><Paperclip size={11} /> {value.file} · no file uploaded</span>)}
+            {value.ref && (isLink(value.ref)
+              ? <a className="linkbtn xs" href={value.ref} target="_blank" rel="noopener noreferrer"><Link2 size={11} /> {value.ref} <ExternalLink size={11} /></a>
+              : <span className="xs mute"><Link2 size={11} /> {value.ref}</span>)}
           </div>
         )}
+        {open && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <input className="input" style={{ flex: 1, minWidth: 200 }} aria-label={`Link or document name for ${item}`} value={ref} onChange={(e) => setRef(e.target.value)} placeholder="Link or document name" disabled={busy} />
+            <label className={`btn sm${busy ? ' disabled' : ''}`} style={{ cursor: busy ? 'wait' : 'pointer' }} aria-disabled={busy}>{busy ? <><Loader2 size={13} className="spin" /> Uploading</> : 'Upload file'}
+              <input type="file" hidden disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) upload(f); }} />
+            </label>
+            <button type="button" className="btn primary sm" disabled={busy || !ref.trim()} onClick={saveLink}>Save</button>
+            <button type="button" className="btn ghost sm" disabled={busy} onClick={() => { setOpen(false); setErr(''); }}>Cancel</button>
+          </div>
+        )}
+        {err && <div className="xs" role="alert" style={{ color: 'var(--bad)', marginTop: 4 }}>{err}</div>}
       </div>
       <div className="row" style={{ gap: 6 }}>
         {has ? <Pill tone="good">Attached</Pill> : <Pill>Not attached</Pill>}
-        {editable && !open && <button type="button" className="btn sm" onClick={() => { setRef(value?.ref || ''); setOpen(true); }}>{has ? 'Change' : 'Attach'}</button>}
-        {editable && has && !open && <button type="button" className="btn ghost sm" aria-label={`Remove evidence for ${item}`} onClick={() => onSave(null)}><X size={14} /></button>}
+        {editable && !open && <button type="button" className="btn sm" onClick={() => { setRef(value?.ref || ''); setErr(''); setOpen(true); }}>{has ? 'Change' : 'Attach'}</button>}
+        {editable && has && !open && <button type="button" className="btn ghost sm" aria-label={`Remove evidence for ${item}`} onClick={remove}><X size={14} /></button>}
       </div>
     </div>
   );
@@ -122,7 +169,7 @@ function StageView({ s, n }) {
         </Panel>
         <Panel title="Evidence" right={<span className="small mute num">{evCount}/{st.evidence.length}</span>}>
           {st.evidence.map((item) => (
-            <EvidenceItem key={`${n}-${item}`} item={item} value={rec.evidence[item]} editable={canEdit} onSave={(v) => setEvidence(s.id, n, item, v)} />
+            <EvidenceItem key={`${n}-${item}`} item={item} value={rec.evidence[item]} editable={canEdit} systemId={s.id} stage={n} onSave={(v) => setEvidence(s.id, n, item, v)} />
           ))}
         </Panel>
       </div>
