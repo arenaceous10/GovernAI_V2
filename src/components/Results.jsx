@@ -31,9 +31,9 @@ export function PillarRadar({ pillars, height = 240 }) {
     <div style={{ height }}>
       <ResponsiveContainer>
         <RadarChart data={data} outerRadius="70%">
-          <PolarGrid stroke="#DDE2E8" />
-          <PolarAngleAxis dataKey="pillar" tick={{ fontSize: 12, fill: '#39435A' }} />
-          <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+          <PolarGrid stroke="#111111" strokeDasharray="3 3" />
+          <PolarAngleAxis dataKey="pillar" tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} />
+          <PolarRadiusAxis domain={[0, 100]} ticks={[0, 50, 100]} tick={{ fontSize: 10, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} />
           <Radar dataKey="score" stroke="#2F6B4F" fill="#2F6B4F" fillOpacity={0.22} isAnimationActive={false} />
         </RadarChart>
       </ResponsiveContainer>
@@ -48,11 +48,11 @@ export function PrincipleRadar({ principles, height = 280 }) {
     <div style={{ height }}>
       <ResponsiveContainer>
         <RadarChart data={data} outerRadius="66%">
-          <PolarGrid stroke="#DDE2E8" />
-          <PolarAngleAxis dataKey="p" tick={{ fontSize: 12, fill: '#39435A' }} />
-          <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+          <PolarGrid stroke="#111111" strokeDasharray="3 3" />
+          <PolarAngleAxis dataKey="p" tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} />
+          <PolarRadiusAxis domain={[0, 100]} ticks={[0, 50, 100]} tick={{ fontSize: 10, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} />
           <Radar name="Risk" dataKey="Risk" stroke="#B83A2E" fill="#B83A2E" fillOpacity={0.12} isAnimationActive={false} />
-          <Radar name="Controls in place" dataKey="Readiness" stroke="#3A46C9" fill="#3A46C9" fillOpacity={0.18} isAnimationActive={false} />
+          <Radar name="Controls in place" dataKey="Readiness" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.2} isAnimationActive={false} />
           <Tooltip formatter={(v) => `${v}/100`} />
           <Legend wrapperStyle={{ fontSize: 12 }} />
         </RadarChart>

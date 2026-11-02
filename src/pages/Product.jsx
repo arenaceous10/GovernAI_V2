@@ -352,10 +352,10 @@ function History({ s }) {
         <div style={{ height: 220 }}>
           <ResponsiveContainer>
             <LineChart data={data} margin={{ right: 20 }}>
-              <CartesianGrid stroke="#EBEEF2" vertical={false} />
-              <XAxis dataKey="n" tick={{ fontSize: 12 }} /><YAxis domain={[0, 100]} tick={{ fontSize: 12 }} /><Tooltip />
+              <CartesianGrid stroke="#111111" strokeDasharray="3 3" />
+              <XAxis dataKey="n" tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} /><YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} /><Tooltip />
               <Line dataKey="Score" stroke="#B83A2E" isAnimationActive={false} />
-              <Line dataKey="Controls in place" stroke="#3A46C9" isAnimationActive={false} />
+              <Line dataKey="Controls in place" stroke="var(--accent)" isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -381,7 +381,7 @@ export default function Product({ id, nav, back }) {
   const rec = s.stages?.[s.stage];
   return (
     <div>
-      <button className="btn ghost" style={{ marginBottom: 8, paddingLeft: 0 }} onClick={() => nav(back)}><ArrowLeft size={16} /> Back</button>
+      <button className="btn ghost product-back" style={{ marginBottom: 8, paddingLeft: 0 }} onClick={() => nav(back)}><ArrowLeft size={16} /> Back</button>
       <div className="page-head">
         <div>
           <div className="row"><h1>{s.name}</h1><TierBadge tier={r.tier} /><StatusPill status={s.status} /></div>

@@ -1,4 +1,4 @@
-import { Bar as RBar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar as RBar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { TIERS, TIER_ORDER, PRINCIPLE_IDS } from '../data/frameworks.js';
 import { STAGES, STAGE_STATUS } from '../data/lifecycle.js';
 import { Panel, Stat, TierBadge, StatusPill } from '../components/ui.jsx';
@@ -40,27 +40,28 @@ export default function Dashboard({ nav }) {
   const cname = (id) => state.clients.find((c) => c.id === id)?.name;
 
   return (
-    <div>
+    <div className="dashboard">
       <div className="page-head">
         <div><h1>{role === 'client' ? `${state.clients.find((c) => c.id === state.clientOrg)?.name || 'Your'} AI portfolio` : 'AI portfolio'}</h1></div>
         {role !== 'admin' && <button className="btn primary" onClick={() => nav('/new')}>Register an AI product</button>}
       </div>
 
-      <div className="grid g4">
+      <div className="grid g4 dashboard-stats">
         <Stat value={live.length} label="AI products" />
         <Stat value={live.filter((s) => s.status === 'In production').length} label="In production" />
         <Stat value={tierCounts[2].n + tierCounts[3].n} label="High or prohibited" color={tierCounts[2].n + tierCounts[3].n ? 'var(--bad)' : undefined} />
         <Stat value={awaiting} label="Stages awaiting review" />
       </div>
 
-      <div className="grid g2" style={{ marginTop: 16 }}>
+      <div className="grid g3 dashboard-charts" style={{ marginTop: 16 }}>
         <Panel title="Risk tiers">
-          <div style={{ height: 200 }}>
+          <div className="dashboard-chart-plot">
             <ResponsiveContainer>
               <BarChart data={tierCounts} layout="vertical" margin={{ left: 10, right: 24 }}>
-                <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12, fill: '#5A6478' }} axisLine={false} tickLine={false} />
-                <YAxis type="category" dataKey="tier" width={92} tick={{ fontSize: 13, fill: '#1B2232' }} axisLine={false} tickLine={false} />
-                <Tooltip cursor={{ fill: '#F3F5F7' }} formatter={(v) => [v, 'Products']} />
+                <CartesianGrid stroke="#111111" strokeDasharray="3 3" horizontal={false} />
+                <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} />
+                <YAxis type="category" dataKey="tier" width={92} tick={{ fontSize: 13, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} />
+                <Tooltip cursor={{ fill: 'var(--accent-soft)' }} formatter={(v) => [v, 'Products']} />
                 <RBar dataKey="n" radius={[0, 4, 4, 0]} barSize={20} isAnimationActive={false}>
                   {tierCounts.map((t) => <Cell key={t.key} fill={TIERS[t.key].color} />)}
                 </RBar>
@@ -69,20 +70,24 @@ export default function Dashboard({ nav }) {
           </div>
         </Panel>
         <Panel title="Lifecycle stage">
-          <div style={{ height: 200 }}>
+          <div className="dashboard-chart-plot">
             <ResponsiveContainer>
               <BarChart data={pipeline} margin={{ left: -20, right: 10 }}>
-                <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#5A6478' }} axisLine={false} tickLine={false} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: '#5A6478' }} axisLine={false} tickLine={false} />
-                <Tooltip cursor={{ fill: '#F3F5F7' }} formatter={(v) => [v, 'Products']} labelFormatter={(l) => `Stage ${l}: ${STAGES[l - 1].short}`} />
-                <RBar dataKey="n" fill="#3A46C9" radius={[4, 4, 0, 0]} barSize={22} isAnimationActive={false} />
+                <CartesianGrid stroke="#111111" strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} />
+                <Tooltip cursor={{ fill: 'var(--accent-soft)' }} formatter={(v) => [v, 'Products']} labelFormatter={(l) => `Stage ${l}: ${STAGES[l - 1].short}`} />
+                <RBar dataKey="n" fill="var(--accent)" radius={[4, 4, 0, 0]} barSize={22} isAnimationActive={false} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </Panel>
+        <Panel title="Responsible AI principles">
+          <div className="dashboard-chart-plot"><PrincipleRadar principles={principleAvg} height={220} /></div>
+        </Panel>
       </div>
 
-      <div className="grid g-wide" style={{ marginTop: 16 }}>
+      <div style={{ marginTop: 16 }}>
         <Panel title="Needs your attention">
           {items.length === 0 ? <div className="empty">Nothing needs you right now.</div> : (
             <table className="table">
@@ -97,7 +102,6 @@ export default function Dashboard({ nav }) {
             </table>
           )}
         </Panel>
-        <Panel title="Responsible AI principles"><PrincipleRadar principles={principleAvg} height={240} /></Panel>
       </div>
 
       <Panel title="AI products" style={{ marginTop: 16 }} right={<button className="btn ghost sm" onClick={() => nav('/products')}>View all</button>}>
