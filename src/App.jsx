@@ -44,7 +44,7 @@ NAV.lead = NAV.assessor;
 const EXTRA = { client: ['product', 'draft', 'reassess'], assessor: ['product', 'draft', 'reassess'], lead: ['product', 'draft', 'reassess'], admin: ['product'] };
 
 export default function App() {
-  const { role, setRole, state, systems, client } = useStore();
+  const { role, setRole, state, systems, client, sync } = useStore();
   const [route, nav] = useHashRoute();
   if (!role) return <Landing />;
 
@@ -90,6 +90,10 @@ export default function App() {
           ))}
         </nav>
         <div className="side-foot">
+          <div className={`sync ${sync.error ? 'bad' : sync.mode === 'local' ? 'warn' : ''}`} role="status">
+            <i aria-hidden />
+            {sync.error ? <span>Not saved. <button onClick={sync.retry}>Retry</button></span> : sync.mode === 'local' ? 'Demo data in this browser' : 'Saved to database'}
+          </div>
           <div className="who"><span className="xs mute">Signed in as</span><b>{ROLES[role].name}</b></div>
           <select className="input" aria-label="Switch role" value={switchValue} onChange={(e) => {
             const [r, org] = e.target.value.split(':');

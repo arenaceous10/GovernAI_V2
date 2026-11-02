@@ -1,9 +1,11 @@
 const { chromium } = require('playwright');
+const { install, newDb } = require('./fake-supabase.cjs');
+const CLOUD = process.env.CLOUD === '1';
 const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
 (async () => {
-  const URL = process.env.URL || 'http://localhost:4173/';
+  const URL = process.env.URL || (CLOUD ? 'http://localhost:4174/' : 'http://localhost:4173/'); const db = newDb();
   const SHOT = process.env.SHOT !== '0';
-  const b = await chromium.launch(); const p = await (await b.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+  const b = await chromium.launch(); const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } }); if (CLOUD) await install(ctx, db); const p = await ctx.newPage();
   const errs = []; p.on('pageerror', (e) => errs.push('pageerror: ' + e.message)); p.on('console', (m) => { if (m.type() === 'error' && !/generate-questions|501|404|Failed to load resource/.test(m.text())) errs.push(m.text()); });
   const S = async (n) => SHOT && p.screenshot({ path: `./e2e-shots/${n}.png`, fullPage: true });
   const W = (ms = 150) => p.waitForTimeout(ms);
@@ -13,7 +15,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   const btn = (name) => p.getByRole('button', { name, exact: true });
   const tab = async (name) => { await p.getByRole('tab', { name }).click(); await W(); };
 
-  await p.goto(URL); await p.evaluate(() => localStorage.clear()); await p.reload(); await W();
+  await p.goto(URL); await p.evaluate(() => localStorage.clear()); await p.reload(); await W(CLOUD ? 900 : 150);
   await S('01-landing'); await noFractal('landing');
   let t = await body(); assert(!/Northwind|Meridian|Lotus/.test(t), 'client names on landing');
   assert(await btn('Enter GovernAI').isDisabled(), 'enter disabled before choice');
@@ -119,6 +121,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   await p.click('nav >> text=Audit log'); await W(); t = await body(); assert(t.includes('Gate overridden') && t.includes('Incident reported'), 'audit');
   // reviewer sees all clients
   await role('assessor'); await p.goto(URL + '#products'); await W(); t = await body(); assert(t.includes('CV screening assistant') && t.includes('Northwind'), 'team sees all'); await S('20-team-products');
+  if (CLOUD) { const row = db.tables.v2_products.find((r) => r.id === pid); assert(row && row.data.status === 'Retired' && row.stage === 10, 'database holds the retired product'); assert(db.tables.v2_audit.some((r) => r.action === 'Gate overridden'), 'audit saved'); }
   console.log(JSON.stringify({ ok: true, errors: errs }));
   await b.close();
 })().catch((e) => { console.log(JSON.stringify({ ok: false, error: e.message })); process.exit(1); });

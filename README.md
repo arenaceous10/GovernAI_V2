@@ -8,13 +8,21 @@ reviews evidence and signs off each of the ten lifecycle stages from the Respons
 ```bash
 npm install          # once, needs internet
 npm run dev          # http://localhost:5173
-npm test             # engine tests
+npm test             # engine and database-layer tests
 npm run build        # production build in dist/
 npm run build:single # one self-contained dist-single/index.html (double-click to open)
 ```
 
-Data is kept in the browser with a demo portfolio of 8 products across 3 clients.
-Administrator > Settings > Reset to demo data restores it.
+## Database (Supabase)
+
+With `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` set (see `.env.example`), every change is saved to Supabase and shared
+between browsers. Without them the app runs on browser-only demo data (sidebar shows which). On first run it seeds a demo
+portfolio of 8 products across 3 clients. Administrator > Settings > Reset to demo data restores it.
+
+- Tables are prefixed `v2_` (`supabase/migrations/001_governai_v2.sql`) and sit beside any other tables in the project.
+- **Demo access only:** there is no login yet, so row-level security lets the browser key read and write these tables.
+  Keep sample data only until sign-in is added, then replace the `demo open access` policies with per-user rules.
+- A save failure shows "Not saved" with a Retry button in the sidebar. Other people's changes appear when the tab regains focus.
 
 ## Deploy on Vercel
 
@@ -64,6 +72,11 @@ npm run build && npx vite preview --port 4173
 node tests/e2e/lifecycle.cjs               # landing, registration, all 10 stages, returns, override, incident, retirement
 node tests/e2e/drafts-reassess-mobile.cjs  # drafts, re-assessment, mobile layout
 node tests/e2e/random-clicks.cjs 7 3       # random clicks on every page for every role
+# Cloud mode, against an in-memory Supabase stand-in (tests/e2e/fake-supabase.cjs):
+VITE_SUPABASE_URL=https://fake.supabase.co VITE_SUPABASE_ANON_KEY=test npx vite build --outDir dist-cloudtest
+npx vite preview --outDir dist-cloudtest --port 4174
+node tests/e2e/cloud.cjs
+CLOUD=1 node tests/e2e/lifecycle.cjs
 ```
 (e2e scripts need `npm i -D playwright`.)
 
@@ -73,7 +86,8 @@ node tests/e2e/random-clicks.cjs 7 3       # random clicks on every page for eve
 api/generate-questions.js   Gemini endpoint (Vercel)
 src/data/                   lifecycle.js (charter stages), frameworks.js, questionBank.js, countries.js
 src/engine/                 engine.js (scoring, tiers, question selection), report.js
-src/store/                  localStorage store and demo seed (swap for Supabase later)
+src/store/                  store.jsx (state), sync.js (Supabase reads/writes), seed.js (demo data)
+supabase/migrations/        SQL for the v2_ tables
 src/pages/                  Landing, Dashboard, Products, Product (lifecycle), NewAssessment, Other, Admin, Catalog
 ```
 

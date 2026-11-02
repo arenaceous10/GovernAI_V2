@@ -1,16 +1,26 @@
 // App state kept in the browser (localStorage). Swap load/save for Supabase or an API later;
 // the rest of the app only uses the functions exposed by useStore().
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { buildSeed } from './seed.js';
+import { cloud } from '../lib/cloud.js';
+import { applyOps, diffState, isEmptyOps, loadAll, resetAll } from './sync.js';
 import { requiredApprovals, nextStage, stageOf } from '../data/lifecycle.js';
 import { TIERS, SELECTABLE_FRAMEWORKS } from '../data/frameworks.js';
 
 const KEY = 'governai.v4';
 const Ctx = createContext(null);
 
+const SESSION = 'governai.session';
+export const defaultSettings = () => ({ aiQuestions: true, enabledFrameworks: [...SELECTABLE_FRAMEWORKS], cutoffs: {} });
 const freshState = (keep = {}) => ({
-  ...buildSeed(), role: null, clientOrg: null,
-  settings: { aiQuestions: true, enabledFrameworks: [...SELECTABLE_FRAMEWORKS], cutoffs: {} }, bankOverrides: {}, ...keep,
+  ...buildSeed(), role: null, clientOrg: null, settings: defaultSettings(), bankOverrides: {}, ...keep,
+});
+const shell = () => ({ systems: [], audit: [], clients: [], users: [], role: null, clientOrg: null, settings: defaultSettings(), bankOverrides: {} });
+const withTimeout = (promise, ms) => Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error("The database didn't respond in time. It may be paused.")), ms))]);
+const readSession = () => { try { return JSON.parse(localStorage.getItem(SESSION)) || {}; } catch { return {}; } };
+const fromRemote = (base, r) => ({
+  ...base, systems: r.systems, clients: r.clients, users: r.users, audit: r.audit,
+  settings: { ...defaultSettings(), ...(r.settings || {}) }, bankOverrides: r.bankOverrides || {},
 });
 
 function load() {
@@ -68,8 +78,80 @@ function advanceFrom(x, n, conditions = '') {
 }
 
 export function StoreProvider({ children }) {
-  const [state, setState] = useState(load);
-  useEffect(() => save(state), [state]);
+  const [mode, setMode] = useState(cloud ? 'cloud' : 'local');
+  const [boot, setBoot] = useState(cloud ? 'loading' : 'ready');
+  const [bootError, setBootError] = useState('');
+  const [syncError, setSyncError] = useState('');
+  const [state, setState] = useState(() => (cloud ? shell() : load()));
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const savedRef = useRef(null);          // the last state the database is known to hold
+  const queue = useRef(Promise.resolve());
+  const lastFetch = useRef(0);
+  const started = useRef(false);          // React dev mode runs effects twice; load and seed only once
+
+  // ----- cloud: first load (seeds the sample data when the tables are empty) -----
+  const start = useCallback(async () => {
+    setBoot('loading'); setBootError('');
+    try {
+      const remote = await withTimeout(loadAll(cloud), 15000);
+      let next;
+      if (remote.empty) {
+        next = { ...shell(), ...buildSeed() };
+        await resetAll(cloud, next);
+      } else {
+        next = fromRemote(shell(), remote);
+      }
+      const sess = readSession();
+      const valid = sess.role && (sess.role !== 'client' || next.clients.some((c) => c.id === sess.clientOrg));
+      next = { ...next, role: valid ? sess.role : null, clientOrg: valid ? sess.clientOrg || null : null };
+      savedRef.current = next; lastFetch.current = Date.now();
+      setState(next); setBoot('ready');
+    } catch (e) {
+      setBootError(e.message || 'Could not reach the database'); setBoot('error');
+    }
+  }, []);
+  useEffect(() => { if (mode === 'cloud' && !started.current) { started.current = true; start(); } }, [mode, start]);
+
+  // ----- local mode: keep everything in this browser -----
+  useEffect(() => { if (mode === 'local') save(state); }, [state, mode]);
+
+  // ----- cloud: save whatever changed since the last successful save, one write at a time -----
+  const flush = useCallback(() => {
+    queue.current = queue.current.then(async () => {
+      const target = stateRef.current;
+      if (!savedRef.current) return;
+      const ops = diffState(savedRef.current, target);
+      if (isEmptyOps(ops)) { savedRef.current = target; return; }
+      try { await applyOps(cloud, ops); savedRef.current = target; setSyncError(''); }
+      catch (e) { setSyncError(e.message || 'Could not save'); }
+    });
+    return queue.current;
+  }, []);
+  useEffect(() => { if (mode === 'cloud' && boot === 'ready' && savedRef.current && savedRef.current !== state) flush(); }, [state, mode, boot, flush]);
+  useEffect(() => {
+    if (mode === 'cloud' && boot === 'ready') { try { localStorage.setItem(SESSION, JSON.stringify({ role: state.role, clientOrg: state.clientOrg })); } catch { /* ignore */ } }
+  }, [state.role, state.clientOrg, mode, boot]);
+
+  // ----- cloud: pick up other people's changes when the tab regains focus (never over unsaved changes) -----
+  useEffect(() => {
+    if (mode !== 'cloud' || boot !== 'ready') return undefined;
+    const refresh = async () => {
+      if (document.visibilityState !== 'visible' || Date.now() - lastFetch.current < 15000) return;
+      lastFetch.current = Date.now();
+      await queue.current;
+      try {
+        const remote = await loadAll(cloud);
+        if (remote.empty || !savedRef.current) return;
+        const cur = stateRef.current;
+        if (!isEmptyOps(diffState(savedRef.current, cur))) return;
+        const next = fromRemote(cur, remote);
+        savedRef.current = next; setState(next);
+      } catch { /* keep what is on screen */ }
+    };
+    document.addEventListener('visibilitychange', refresh); window.addEventListener('focus', refresh);
+    return () => { document.removeEventListener('visibilitychange', refresh); window.removeEventListener('focus', refresh); };
+  }, [mode, boot]);
 
   const log = (s, action, target, detail) => ({
     ...s, audit: [{ at: nowIso(), actor: s.role, org: s.role === 'client' ? s.clientOrg : null, action, target, detail }, ...s.audit].slice(0, 800),
@@ -97,7 +179,15 @@ export function StoreProvider({ children }) {
       client: state.clients.find((c) => c.id === state.clientOrg),
       setRole: (role, clientOrg = null) => setState((s) => ({ ...s, role, clientOrg: role === 'client' ? clientOrg || s.clients[0]?.id : null })),
       setSetting: (k, v) => setState((s) => log({ ...s, settings: { ...s.settings, [k]: v } }, 'Setting changed', null, `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)),
-      resetDemo: () => setState((s) => freshState({ role: s.role, clientOrg: s.role === 'client' ? s.clients[0]?.id : null })),
+      resetDemo: async () => {
+        const next = freshState({ role: state.role, clientOrg: state.role === 'client' ? state.clients[0]?.id || null : null });
+        if (mode === 'cloud') {
+          try { await queue.current; await resetAll(cloud, next); savedRef.current = next; setSyncError(''); }
+          catch (e) { setSyncError(e.message || 'Could not reset'); return; }
+        }
+        setState(next);
+      },
+      sync: { mode, error: syncError, retry: flush },
 
       // ----- registration -----
       saveDraft: (id, draft, meta) => {
@@ -187,8 +277,25 @@ export function StoreProvider({ children }) {
         return log({ ...s, bankOverrides: b }, 'Question wording reset', null, qid);
       }),
     };
-  }, [state, updateSystem]);
+  }, [state, updateSystem, mode, syncError, flush]);
 
+  if (boot !== 'ready') {
+    return (
+      <div className="boot" role="status">
+        <div className="mark">G</div>
+        {boot === 'loading' ? <p>Loading GovernAI…</p> : (
+          <>
+            <p><b>Couldn't reach the database.</b></p>
+            <p className="small mute">{bootError}</p>
+            <div className="row" style={{ justifyContent: 'center' }}>
+              <button className="btn primary" onClick={start}>Try again</button>
+              <button className="btn" onClick={() => { setMode('local'); setState(load()); setBoot('ready'); }}>Use demo data in this browser</button>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
   return <Ctx.Provider value={api}>{children}</Ctx.Provider>;
 }
 
