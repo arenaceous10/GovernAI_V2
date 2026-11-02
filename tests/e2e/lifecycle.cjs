@@ -23,13 +23,23 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   await p.getByRole('radio', { name: /Client portal/ }).click(); await btn('Enter GovernAI').click(); await W(300);
   await S('02-client-dashboard'); await noFractal('client dashboard');
   t = await body(); assert(t.includes('Motor claims triage model') && !t.includes('CV screening'), 'client scoped to own org');
-  assert(/Risk tiers/.test(t) && /Lifecycle stage/.test(t), 'dashboard charts');
+  assert(/Your AI lifecycle/.test(t) && /Your next steps/.test(t) && /Where your products are/.test(t), 'client home');
   await p.goto(URL + '#audit'); await W(); assert((await body()).includes('not available for your role'), 'client guard');
   await p.goto(URL + '#products'); await W(); await S('03-client-products'); await noFractal('products');
-  await p.getByText('Motor claims triage model').click(); await W(300); await S('04-product-overview');
+  await p.getByText('Motor claims triage model').first().click(); await W(300); await S('05-lifecycle-stage4');
+  assert((await p.locator('.hero-stage .stage-chip').innerText()) === '4' && (await body()).includes('Design and development'), 'stage 4 shown');
+  assert(await p.locator('main input[type=checkbox]').count() > 0, 'client can tick');
+  await tab('Risk and score'); await S('04-product-overview');
   t = await body(); assert(t.includes('Responsible AI principles') && /score \d+\/100/.test(t), 'overview shows score');
-  await tab('Lifecycle'); await S('05-lifecycle-stage4');
-  assert((await body()).includes('Stage 4: Design and development'), 'stage 4 shown');
+  // reviewer: read-only on an open stage
+  await role('assessor'); await p.goto(URL + '#products'); await W(); await p.getByText('Motor claims triage model').first().click(); await W(300);
+  assert(await p.locator('main input[type=checkbox]').count() === 0, 'reviewer cannot tick');
+  assert(await p.getByRole('button', { name: 'Attach' }).count() === 0 && await p.getByRole('button', { name: /Submit/ }).count() === 0 && await btn('Tick all').count() === 0, 'reviewer cannot attach or submit');
+  assert((await body()).includes('The client is working on this stage'), 'reviewer told client is working');
+  assert(await p.locator('.check-ro').count() > 0, 'read-only checklist');
+  t = await body(); assert(/Review workspace/.test(await (async () => { await p.goto(URL + '#dashboard'); await W(); return body(); })()), 'reviewer home');
+  await p.goto(URL + '#new'); await W(); assert((await body()).includes('not available for your role'), 'reviewer cannot register');
+  await role('client:northwind');
 
   // register a new product
   await p.goto(URL + '#new'); await W(200);
@@ -63,12 +73,12 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   const tailored = (await body()).match(/(\d+) standard, (\d+) tailored/); const share = +tailored[2] / (+tailored[1] + +tailored[2]);
   assert(share >= 0.2 && share <= 0.3, 'share ' + share);
   await btn('Register product').click(); await W(300);
-  await S('11-registered'); t = await body(); assert(t.includes('Health claims fraud assistant') && /High risk/.test(t), 'registered as High');
+  await S('11-registered'); t = await body(); assert(t.includes('Health claims fraud assistant') && /\bHigh\b/.test(t), 'registered as High');
   const pid = (await p.evaluate(() => location.hash)).replace('#product--', '');
 
   // stage helper
   const openLife = async () => { await p.goto(URL + '#product--' + pid); await W(250); await tab('Lifecycle'); };
-  const stageNo = async () => +((await body()).match(/Stage (\d+) of 10/) || [])[1];
+  const stageNo = async () => +(await p.locator('.hero-stage .stage-chip').innerText());
   const clientSubmit = async () => {
     await role('client:northwind'); await openLife();
     const ta = btn('Tick all'); if (await ta.count()) await ta.click();
@@ -93,15 +103,21 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   await approve('lead'); assert(await stageNo() === 3, 'lead approval moves to stage 3');
   // stage 3: return then resubmit
   await clientSubmit(); await role('assessor'); await openLife();
-  await p.getByLabel('Comment').fill('Attach the data card and licence register.'); await btn('Return').click(); await W();
+  await p.getByLabel('Comment to the client').fill('Attach the data card and licence register.');
+  await p.getByLabel(/Internal note/).fill('SECRET-TEAM-NOTE vendor licence looks doubtful'); await btn('Return').click(); await W();
+  assert((await body()).includes('SECRET-TEAM-NOTE'), 'reviewer sees internal note in activity');
+  await role('lead'); await openLife(); assert((await body()).includes('SECRET-TEAM-NOTE'), 'lead sees internal note');
   await role('client:northwind'); await openLife(); t = await body(); assert(t.includes('Returned') && t.includes('Attach the data card'), 'client sees return'); await S('14-returned');
+  assert(!t.includes('SECRET-TEAM-NOTE'), 'client never sees internal note');
+  for (const tb of ['History', 'Assessment', 'Actions']) { await tab(new RegExp('^' + tb)); assert(!(await body()).includes('SECRET-TEAM-NOTE'), 'internal note hidden on ' + tb); }
+  await p.goto(URL + '#actions'); await W(); assert(!(await body()).includes('SECRET-TEAM-NOTE'), 'hidden on actions page'); await openLife();
   await p.getByRole('button', { name: 'Submit for review' }).click(); await W(); await approve('assessor'); assert(await stageNo() === 4, 'stage 4');
   // stage 4: lead override
   await role('lead'); await openLife(); await p.getByLabel('Override reason').fill('Design review held offline, minutes to follow'); await btn('Override').click(); await W(); assert(await stageNo() === 5, 'override to 5');
   // stage 5 and 6 (gates, High)
   await clientSubmit(); await approve('assessor'); await approve('lead'); assert(await stageNo() === 6, 'stage 6');
   await clientSubmit(); await approve('assessor'); await role('lead'); await openLife();
-  await p.getByLabel('Comment').fill('Monthly fairness report for six months'); await btn('Approve with conditions').click(); await W();
+  await p.getByLabel('Comment to the client').fill('Monthly fairness report for six months'); await btn('Approve with conditions').click(); await W();
   assert(await stageNo() === 7, 'in production'); assert((await body()).includes('In production'), 'status production'); await S('15-production');
   // incident -> 9 -> back to 7
   await role('client:northwind'); await openLife();

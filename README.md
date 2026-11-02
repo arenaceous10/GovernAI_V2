@@ -34,12 +34,15 @@ written by Gemini through `api/generate-questions.js`. Without it, the built-in 
 
 ## Roles
 
-| Role | Sees | Does |
+| Role | Home screen | Does |
 |---|---|---|
-| Client | Their organisation's products: scores, tiers, lifecycle stage | Registers products, completes stage checklists, attaches evidence, submits stages |
-| Governance reviewer | All clients | Reviews stages: approve, approve with conditions, or return |
-| Governance lead | All clients | Also signs stages 2, 5 and 6 for High-risk products; can override a gate with a reason |
-| Administrator | All clients (read-only) | Clients and users, question bank wording, frameworks, tier cut-offs, audit log |
+| Client | Your next steps, products by lifecycle phase | Registers and re-assesses products, ticks checklists, attaches evidence, submits stages, updates actions and data assets, raises changes, incidents and retirement. Sees only their own products and never sees internal notes. |
+| Governance reviewer | Review queue with waiting time, pipeline board | Reviews submitted stages: approve, approve with conditions, or return, with a comment to the client and an optional internal note. Read-only otherwise. |
+| Governance lead | Gate decisions, risk-by-phase matrix, pipeline board | Also signs stages 2, 5 and 6 for High-risk products, can sign in a reviewer's place, can override a gate with a reason, can raise production events. |
+| Administrator | Setup shortcuts and recent activity | Clients and users, question bank wording, frameworks, tier cut-offs, audit log. Read-only on products. |
+
+The permissions are enforced in the store as well as the UI. Internal notes are hidden in the app, but until real sign-in
+replaces the demo database access they are stored in the same product record, so treat them as confidential only after login is added.
 
 ## Flow
 

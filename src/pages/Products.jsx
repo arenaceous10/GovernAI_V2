@@ -32,7 +32,7 @@ export default function Products({ nav }) {
         <div><h1>AI products</h1></div>
         <div className="row">
           <button className="btn" onClick={exportCsv}><Download size={16} /> Export</button>
-          {role !== 'admin' && <button className="btn primary" onClick={() => nav('/new')}>Register an AI product</button>}
+          {role === 'client' && <button className="btn primary" onClick={() => nav('/new')}>Register an AI product</button>}
         </div>
       </div>
       {drafts.length > 0 && (
@@ -71,7 +71,7 @@ export default function Products({ nav }) {
                     <td><TierBadge tier={r.tier} /></td>
                     <td className="num">{r.residual}</td>
                     <td className="num">{r.readiness}%</td>
-                    <td><StageMini stage={s.stage} status={s.status} /></td>
+                    <td><StageMini s={s} /></td>
                     <td><StatusPill status={s.status === 'Blocked' || s.status === 'Retired' ? s.status : STAGE_STATUS[s.stages?.[s.stage]?.status || 'open']} /></td>
                   </tr>
                 );

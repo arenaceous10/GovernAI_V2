@@ -39,6 +39,15 @@ function save(state) {
 
 const nowIso = () => new Date().toISOString();
 const uid = (p) => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+// Who may do what. The client does the lifecycle work; the governance team reviews.
+export const CAN = {
+  work: (role) => role === 'client',                       // checklist, evidence, submit, register, re-assess, data, actions
+  review: (role) => role === 'assessor' || role === 'lead',
+  override: (role) => role === 'lead',
+  raiseEvent: (role) => role === 'client' || role === 'lead', // change, incident, retirement from production
+  internal: (role) => role === 'assessor' || role === 'lead' || role === 'admin', // sees internal notes
+};
+
 export const newStage = () => ({ status: 'open', checklist: {}, evidence: {}, approvals: {}, note: '' });
 
 // What stops the current stage from being submitted or approved.
@@ -191,6 +200,7 @@ export function StoreProvider({ children }) {
 
       // ----- registration -----
       saveDraft: (id, draft, meta) => {
+        if (!CAN.work(state.role)) return id;
         const newId = id || uid('sys');
         setState((s) => {
           const exists = s.systems.some((x) => x.id === newId);
@@ -204,6 +214,7 @@ export function StoreProvider({ children }) {
       deleteDraft: (id) => setState((s) => log({ ...s, systems: s.systems.filter((x) => !(x.id === id && x.status === 'Draft')) }, 'Draft deleted', id, '')),
 
       register: (id, meta, assessment, actions) => {
+        if (!CAN.work(state.role)) return id;
         const newId = id || uid('sys');
         setState((s) => {
           const exists = s.systems.some((x) => x.id === newId);
@@ -226,46 +237,48 @@ export function StoreProvider({ children }) {
       },
 
       // ----- lifecycle -----
-      toggleCheck: (id, n, item) => updateSystem(id, (x) => {
+      toggleCheck: (id, n, item) => CAN.work(state.role) && updateSystem(id, (x) => {
         const rec = x.stages[n] || newStage();
         return { ...x, stages: { ...x.stages, [n]: { ...rec, checklist: { ...rec.checklist, [item]: !rec.checklist[item] } } } };
       }),
-      checkAll: (id, n, items) => updateSystem(id, (x) => {
+      checkAll: (id, n, items) => CAN.work(state.role) && updateSystem(id, (x) => {
         const rec = x.stages[n] || newStage();
         return { ...x, stages: { ...x.stages, [n]: { ...rec, checklist: Object.fromEntries(items.map((i) => [i, true])) } } };
       }),
-      setEvidence: (id, n, item, value) => updateSystem(id, (x) => {
+      setEvidence: (id, n, item, value) => CAN.work(state.role) && updateSystem(id, (x) => {
         const rec = x.stages[n] || newStage();
         return { ...x, stages: { ...x.stages, [n]: { ...rec, evidence: { ...rec.evidence, [item]: value } } } };
       }),
-      submitStage: (id, n, note) => updateSystem(id, (x) => ({
-        ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...x.stages[n], status: 'submitted', note, submittedAt: nowIso(), approvals: {}, returnNote: '' } },
+      submitStage: (id, n, note) => CAN.work(state.role) && updateSystem(id, (x) => ({
+        ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...x.stages[n], status: 'submitted', note, submittedAt: nowIso(), approvals: {}, returnNote: '', log: [...(x.stages[n]?.log || []), { at: nowIso(), who: 'client', outcome: 'Submitted', comment: note }] } },
       }), 'Stage submitted for review', (s) => `Stage ${n}: ${stageOf(n).name}`),
-      reviewStage: (id, n, who, outcome, comment) => updateSystem(id, (x) => {
+      reviewStage: (id, n, who, outcome, comment, internal = '') => CAN.review(state.role) && updateSystem(id, (x) => {
         const rec = x.stages[n];
         const need = requiredApprovals(n, x.assessment.results.tier);
         const role = who === 'lead' && !need.includes('lead') ? 'assessor' : who;   // the lead can sign in the reviewer's place
+        const entry = { at: nowIso(), who: state.role, as: role, outcome, comment, internal };
+        const log = [...(rec.log || []), entry];
         if (outcome === 'Returned') {
-          return { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...rec, status: 'returned', returnNote: comment, approvals: { ...rec.approvals, [role]: { outcome, comment, at: nowIso() } } } } };
+          return { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...rec, status: 'returned', returnNote: comment, log, approvals: { ...rec.approvals, [role]: { outcome, comment, internal, at: nowIso() } } } } };
         }
-        const approvals = { ...rec.approvals, [role]: { outcome, comment, at: nowIso() } };
-        const withApproval = { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...rec, approvals } } };
+        const approvals = { ...rec.approvals, [role]: { outcome, comment, internal, at: nowIso() } };
+        const withApproval = { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...rec, approvals, log } } };
         const done = need.every((r) => approvals[r] && approvals[r].outcome !== 'Returned');
         return done ? advanceFrom(withApproval, n, outcome === 'Approved with conditions' ? comment : '') : withApproval;
       }, `Stage ${outcome === 'Returned' ? 'returned' : 'approved'}`, `Stage ${n}${comment ? `: ${comment}` : ''}`),
-      override: (id, n, reason) => updateSystem(id, (x) => advanceFrom({
-        ...x, stages: { ...x.stages, [n]: { ...(x.stages[n] || newStage()), approvals: { ...(x.stages[n]?.approvals || {}), lead: { outcome: 'Approved with conditions', comment: `Override: ${reason}`, at: nowIso() } } } },
+      override: (id, n, reason) => CAN.override(state.role) && updateSystem(id, (x) => advanceFrom({
+        ...x, stages: { ...x.stages, [n]: { ...(x.stages[n] || newStage()), log: [...(x.stages[n]?.log || []), { at: nowIso(), who: 'lead', outcome: 'Overridden', comment: reason }], approvals: { ...(x.stages[n]?.approvals || {}), lead: { outcome: 'Approved with conditions', comment: `Override: ${reason}`, at: nowIso() } } } },
       }, n, `Override: ${reason}`), 'Gate overridden', `Stage ${n}: ${reason}`),
-      startEvent: (id, kind, text) => updateSystem(id, (x) => {
+      startEvent: (id, kind, text) => CAN.raiseEvent(state.role) && updateSystem(id, (x) => {
         const to = { change: 8, incident: 9, retire: 10 }[kind];
         return { ...x, stage: to, stages: { ...x.stages, [to]: newStage() }, events: [...(x.events || []), { at: nowIso(), kind, text }] };
       }, { change: 'Change raised', incident: 'Incident reported', retire: 'Retirement started' }[kind], text),
 
       // ----- actions and data -----
-      updateAction: (id, actionId, patch) => updateSystem(id, (x) => ({
+      updateAction: (id, actionId, patch) => CAN.work(state.role) && updateSystem(id, (x) => ({
         ...x, actions: x.actions.map((a) => (a.id === actionId ? { ...a, ...patch } : a)),
       }), 'Action updated', Object.entries(patch).map(([k, v]) => `${k}: ${v}`).join(', ')),
-      saveData: (id, datasets, outputs) => updateSystem(id, (x) => ({ ...x, datasets, outputs }), 'Data assets updated', `${datasets.length} datasets`),
+      saveData: (id, datasets, outputs) => CAN.work(state.role) && updateSystem(id, (x) => ({ ...x, datasets, outputs }), 'Data assets updated', `${datasets.length} datasets`),
 
       // ----- admin -----
       addClient: (c) => setState((s) => log({ ...s, clients: [...s.clients, { ...c, id: uid('cli') }] }, 'Client added', null, c.name)),

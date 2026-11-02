@@ -52,7 +52,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   // 5. a second browser sees the same data
   const p2 = await open(); await p2.goto(URL); await W(p2, 800); await enter(p2, 'Governance reviewer');
   await p2.goto(URL + '#product--sys-1'); await W(p2); await p2.getByRole('tab', { name: 'Lifecycle' }).click(); await W(p2);
-  assert(await p2.getByRole('checkbox', { name: /Access follows least privilege/ }).isChecked(), 'second browser sees the change');
+  assert(await p2.locator('.check-ro.on', { hasText: 'Access follows least privilege' }).count() === 1, 'second browser sees the change');
   assert(db.tables.v2_products.length === 8, 'no duplicate seeding by the second load');
 
   // 6. save failure: warning, then retry saves it

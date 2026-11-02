@@ -125,6 +125,7 @@ const done = (n, at, tier) => {
     checklist: Object.fromEntries(st.checklist.map((i) => [i, true])),
     evidence: Object.fromEntries(st.evidence.slice(0, Math.max(2, st.evidence.length - 1)).map((i, k) => [i, k % 2 ? { ref: `SharePoint / AI governance / ${i}`, file: '' } : { ref: '', file: file(i) }])),
     approvals: Object.fromEntries(requiredApprovals(n, tier).map((r) => [r, { outcome: 'Approved', comment: '', at }])),
+    log: [{ at, who: 'client', outcome: 'Submitted', comment: '' }, ...requiredApprovals(n, tier).map((r) => ({ at, who: r, as: r, outcome: 'Approved', comment: '', internal: '' }))],
   };
 };
 const current = (n, mode, tier, at, note) => {
@@ -135,7 +136,9 @@ const current = (n, mode, tier, at, note) => {
     returnNote: mode === 'returned' ? note : '',
     checklist: Object.fromEntries(st.checklist.slice(0, all ? st.checklist.length : Math.ceil(st.checklist.length / 2)).map((i) => [i, true])),
     evidence: Object.fromEntries(st.evidence.slice(0, all ? 3 : 1).map((i) => [i, { ref: '', file: file(i) }])),
-    approvals: mode === 'returned' ? { assessor: { outcome: 'Returned', comment: note, at } } : {},
+    approvals: mode === 'returned' ? { assessor: { outcome: 'Returned', comment: note, at, internal: 'Second time the data lineage has been missing; flag to the lead if it happens again.' } } : {},
+    log: all ? [{ at, who: 'client', outcome: 'Submitted', comment: mode === 'submitted' ? 'All items confirmed; evidence attached.' : '' },
+      ...(mode === 'returned' ? [{ at, who: 'assessor', as: 'assessor', outcome: 'Returned', comment: note, internal: 'Second time the data lineage has been missing; flag to the lead if it happens again.' }] : [])] : [],
   };
 };
 
@@ -157,7 +160,7 @@ export function buildSeed() {
     const path = stage <= 7 ? Array.from({ length: stage - 1 }, (_, k) => k + 1) : [1, 2, 3, 4, 5, 6];
     path.forEach((n, k) => { stages[n] = done(n, at(10 + k * 12), tier); });
     if (stage > 7) stages[7] = { ...done(7, at(90), tier) };
-    stages[stage] = current(stage, blocked ? 'open' : d.st, tier, at(100), d.returnNote);
+    stages[stage] = current(stage, blocked ? 'open' : d.st, tier, new Date(today.getTime() - (((i * 2) % 7) + 1) * 86400000).toISOString(), d.returnNote);
     const actions = buildActions(questions, answers, tier, new Date(today.getTime() - (40 - i * 3) * 86400000));
     actions.forEach((a, k) => { if (k % 3 === 0 && stage > 3) a.status = 'Done'; else if (k % 4 === 1) a.status = 'In progress'; a.owner = profile.owner; });
     const id = `sys-${i + 1}`;
