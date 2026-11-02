@@ -121,3 +121,14 @@ export const OUTPUT_TARGETS = [
   'Internal dashboard or report',
   'Downstream system or API',
 ];
+
+// Stages grouped into phases for the lifecycle rail and the pipeline board.
+export const PHASES = [
+  { id: 'plan', name: 'Plan', stages: [1, 2] },
+  { id: 'build', name: 'Build and validate', stages: [3, 4, 5, 6] },
+  { id: 'operate', name: 'Operate', stages: [7, 8, 9] },
+  { id: 'retire', name: 'Retire', stages: [10] },
+];
+export const phaseOf = (n) => PHASES.find((p) => p.stages.includes(n)) || PHASES[0];
+// Stages 8 to 10 only start when something happens in production.
+export const ON_DEMAND = [8, 9, 10];

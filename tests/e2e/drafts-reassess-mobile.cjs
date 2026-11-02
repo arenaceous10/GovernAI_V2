@@ -7,7 +7,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   const body = () => p.locator('#root').innerText(); const W = (ms = 150) => p.waitForTimeout(ms);
   const btn = (n) => p.getByRole('button', { name: n, exact: true });
   await p.goto(URL); await p.evaluate(() => localStorage.clear()); await p.reload();
-  await p.getByRole('radio', { name: /Governance team/ }).click(); await p.getByRole('radio', { name: 'Governance reviewer' }).click(); await btn('Enter GovernAI').click(); await W();
+  await p.getByRole('radio', { name: /Client portal/ }).click(); await btn('Enter GovernAI').click(); await W();
   // draft: save then continue
   await p.goto(URL + '#new'); await W();
   await p.fill('input[placeholder="e.g. Claims triage model"]', 'Draft product X'); await btn('Save draft').click(); await W();
@@ -19,7 +19,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   for (let i = 0; i < 3; i++) { await btn("Continue").click(); await W(400); }
   for (let k = 0; k < 8; k++) { for (const lad of await p.locator('.ladder').all()) await lad.locator('[role=radio]').nth(3).click(); const nx = btn('Next section'); if (await nx.count()) await nx.click(); else break; }
   await btn('Continue').click(); await W(); await btn('Save re-assessment').click(); await W(300);
-  const t = await body(); assert(t.includes('Stage 4 of 10'), 'stage kept after re-assess'); assert(/100%\s*\n?\s*Controls in place/.test(t) || t.includes('100%'), 'controls 100% after best answers');
+  assert((await p.locator('.hero-stage .stage-chip').innerText()) === '4', 'stage kept after re-assess'); await p.getByRole('tab', { name: 'Risk and score' }).click(); await W(); const t = await body(); assert(/100%\s*\n?\s*Controls in place/.test(t) || t.includes('100%'), 'controls 100% after best answers');
   // mobile
   await p.setViewportSize({ width: 390, height: 844 }); await p.goto(URL + '#dashboard'); await W(300);
   const over = await p.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2);

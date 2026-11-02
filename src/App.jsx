@@ -36,12 +36,12 @@ const ACTIONS = { to: '/actions', label: 'Actions', icon: ListChecks };
 const METHOD = { to: '/method', label: 'How it works', icon: BookOpen };
 const NAV = {
   client: [DASH, PRODUCTS, NEW, ACTIONS, METHOD],
-  assessor: [DASH, { to: '/queue', label: 'Review queue', icon: ClipboardCheck, badge: true }, PRODUCTS, NEW, { to: '/catalog', label: 'Data catalog', icon: Database }, ACTIONS, METHOD],
+  assessor: [DASH, { to: '/queue', label: 'Review queue', icon: ClipboardCheck, badge: true }, PRODUCTS, { to: '/catalog', label: 'Data catalog', icon: Database }, ACTIONS, METHOD],
   admin: [DASH, PRODUCTS, { to: '/admin', label: 'Clients and users', icon: Users }, { to: '/bank', label: 'Question bank', icon: Library }, { to: '/settings', label: 'Settings', icon: Settings }, { to: '/audit', label: 'Audit log', icon: History }, METHOD],
 };
 NAV.lead = NAV.assessor;
 // Pages reached by link, per role.
-const EXTRA = { client: ['product', 'draft', 'reassess'], assessor: ['product', 'draft', 'reassess'], lead: ['product', 'draft', 'reassess'], admin: ['product'] };
+const EXTRA = { client: ['product', 'draft', 'reassess'], assessor: ['product'], lead: ['product'], admin: ['product'] };
 
 export default function App() {
   const { role, setRole, state, systems, client, sync } = useStore();
