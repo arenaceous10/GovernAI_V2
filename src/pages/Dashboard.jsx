@@ -1,5 +1,6 @@
 import { AlertTriangle, ArrowRight, Boxes, CheckCircle2, ClipboardCheck, Clock, CornerDownLeft, FilePlus2, Gauge, History, Library, Rocket, Settings, ShieldAlert, Users } from 'lucide-react';
-import { TIERS, TIER_ORDER } from '../data/frameworks.js';
+import { TIERS, TIER_ORDER, PRINCIPLE_IDS } from '../data/frameworks.js';
+import { PrincipleRadar } from '../components/Results.jsx';
 import { QUESTIONS } from '../data/questionBank.js';
 import { STAGES, PHASES, phaseOf, ROLES, requiredApprovals } from '../data/lifecycle.js';
 import { Panel, TierBadge, StatusPill, fmtDate } from '../components/ui.jsx';
@@ -205,6 +206,11 @@ function LeadHome({ nav }) {
   const due = all.filter(overdue);
   const matrix = TIER_ORDER.map((t) => ({ t, cells: PHASES.map((ph) => all.filter((s) => s.assessment.results.tier === t && phaseOf(s.stage).id === ph.id).length) }));
   const max = Math.max(1, ...matrix.flatMap((r) => r.cells));
+  const avg = (xs) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null);
+  const principleAvg = Object.fromEntries(PRINCIPLE_IDS.map((k) => [k, {
+    risk: avg(all.map((s) => s.assessment.results.principles[k]?.risk).filter((x) => x != null)),
+    readiness: avg(all.map((s) => s.assessment.results.principles[k]?.readiness).filter((x) => x != null)),
+  }]));
   return (
     <div className="fade-in">
       <div className="page-head"><div><div className="eyebrow">Governance team</div><h1>Portfolio oversight</h1></div></div>
@@ -226,6 +232,9 @@ function LeadHome({ nav }) {
               ...r.cells.map((n, i) => <span key={`${r.t}${i}`} className="heat-c" style={{ background: n ? `color-mix(in srgb, ${TIERS[r.t].color} ${18 + (n / max) * 55}%, white)` : undefined }}>{n || ''}</span>),
             ])}
           </div>
+        </Panel>
+        <Panel title="Responsible AI principles">
+          <div className="dashboard-chart-plot"><PrincipleRadar principles={principleAvg} height={220} /></div>
         </Panel>
       </div>
       <section className="section">

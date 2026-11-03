@@ -5,13 +5,13 @@ const W = 980; const NODE_W = 196; const NODE_H = 50; const GAP = 16; const TOP 
 function col(i) { return 10 + i * ((W - NODE_W - 20) / 3); }
 
 function Node({ x, y, title, sub, tone = 'plain', badges = [] }) {
-  const fill = { plain: '#FFFFFF', system: '#3A46C9', out: '#F3F5F7' }[tone];
-  const ink = tone === 'system' ? '#FFFFFF' : '#1B2232';
+  const fill = { plain: '#FFFFFF', system: 'var(--accent)', out: 'var(--paper)' }[tone];
+  const ink = tone === 'system' ? '#FFFFFF' : 'var(--ink)';
   return (
     <g>
-      <rect x={x} y={y} width={NODE_W} height={NODE_H} rx={7} fill={fill} stroke={tone === 'system' ? '#3A46C9' : '#C9D0DA'} />
+      <rect x={x} y={y} width={NODE_W} height={NODE_H} rx={7} fill={fill} stroke={tone === 'system' ? 'var(--accent)' : 'var(--line)'} />
       <text x={x + 10} y={y + 20} fontSize="12.5" fontWeight="600" fill={ink}>{title.length > 27 ? `${title.slice(0, 26)}…` : title}</text>
-      {sub && <text x={x + 10} y={y + 37} fontSize="11" fill={tone === 'system' ? '#DDE1FA' : '#5A6478'}>{sub.length > 32 ? `${sub.slice(0, 31)}…` : sub}</text>}
+      {sub && <text x={x + 10} y={y + 37} fontSize="11" fill={tone === 'system' ? '#D8F3E9' : 'var(--mute)'}>{sub.length > 32 ? `${sub.slice(0, 31)}…` : sub}</text>}
       {badges.map((b, i) => (
         <g key={b.t}>
           <rect x={x + NODE_W - 8 - (i + 1) * 20} y={y - 7} width={16} height={14} rx={3} fill={b.ok ? '#E8F3EC' : '#FBE7E4'} stroke={b.ok ? '#2F7D4F' : '#B83A2E'} strokeWidth=".8" />
@@ -35,14 +35,14 @@ export default function LineageGraph({ name, datasets = [], outputs = [] }) {
   return (
     <div className="lineage">
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Data lineage for ${name}`}>
-        {COLS.map((c, i) => <text key={c} x={col(i)} y={14} fontSize="11.5" fill="#5A6478">{c}</text>)}
+        {COLS.map((c, i) => <text key={c} x={col(i)} y={14} fontSize="11.5" fill="var(--mute)">{c}</text>)}
         {datasets.map((d, i) => {
           const y = yAt(i, datasets.length) + NODE_H / 2;
           const dash = d.lineage ? undefined : '5 4';
           return (
             <g key={d.id} fill="none" strokeWidth="1.5">
-              <path d={curve(col(0) + NODE_W, sy[d.sourceSystem || 'Unknown source'] + NODE_H / 2, col(1), y)} stroke={d.lineage ? '#7C86D9' : '#D68A80'} strokeDasharray={dash} />
-              <path d={curve(col(1) + NODE_W, y, col(2), sysY + NODE_H / 2)} stroke={d.lineage ? '#7C86D9' : '#D68A80'} strokeDasharray={dash} />
+              <path d={curve(col(0) + NODE_W, sy[d.sourceSystem || 'Unknown source'] + NODE_H / 2, col(1), y)} stroke={d.lineage ? '#45A894' : '#D68A80'} strokeDasharray={dash} />
+              <path d={curve(col(1) + NODE_W, y, col(2), sysY + NODE_H / 2)} stroke={d.lineage ? '#45A894' : '#D68A80'} strokeDasharray={dash} />
             </g>
           );
         })}

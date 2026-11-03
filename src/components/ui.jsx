@@ -4,7 +4,8 @@ import { LEVEL_NAMES } from '../data/questionBank.js';
 export function TierBadge({ tier }) {
   const t = TIERS[tier];
   if (!t) return null;
-  return <span className="tier" style={{ color: t.color, background: t.bg }}>{t.label}</span>;
+  const isMinimal = tier === 'minimal';
+  return <span className="tier" style={{ color: isMinimal ? '#FFFFFF' : t.color, background: isMinimal ? 'var(--good)' : t.bg }}>{t.label}</span>;
 }
 
 export function Pill({ tone = 'mute', children }) {
@@ -106,7 +107,7 @@ export function RiskScale({ inherent, residual, tier, compact, cut = { limited: 
     <div className={`scale${compact ? ' compact' : ''}`}>
       <div className="scale-track" style={{ gridTemplateColumns: widths.map((w) => `${w}fr`).join(' ') }}>
         {['minimal', 'limited', 'high', 'unacceptable'].map((k) => (
-          <div key={k} style={{ background: TIERS[k].bg, color: TIERS[k].color, opacity: tier === k ? 1 : 0.7 }}>{compact ? '' : TIERS[k].label}</div>
+          <div key={k} style={{ background: k === 'minimal' ? 'var(--good)' : TIERS[k].bg, color: k === 'minimal' ? '#FFFFFF' : TIERS[k].color, opacity: tier === k ? 1 : 0.7 }}>{compact ? '' : TIERS[k].label}</div>
         ))}
         {!unacceptable && inherent !== residual && (
           <div className="scale-marker ghost" style={{ left: pos(inherent) }}>{!compact && <span>Before controls {inherent}</span>}</div>
