@@ -227,6 +227,9 @@ function LeadHome({ nav }) {
             ])}
           </div>
         </Panel>
+        <Panel title="Responsible AI principles">
+          <div className="dashboard-chart-plot"><PrincipleRadar principles={principleAvg} height={220} /></div>
+        </Panel>
       </div>
       <section className="section">
         <div className="section-head"><h2>Lifecycle pipeline</h2><span className="xs mute">All clients</span></div>

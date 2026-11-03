@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, ClipboardCheck, Database, FilePlus2, History, LayoutDashboard, Library, ListChecks, Settings, Boxes, Users } from 'lucide-react';
+import { BookOpen, ClipboardCheck, Database, FilePlus2, History, LayoutDashboard, Library, ListChecks, LogOut, Settings, Boxes, Users } from 'lucide-react';
 import { ROLES } from './data/lifecycle.js';
 import { useStore, waitingOn } from './store/store.jsx';
 import Landing from './pages/Landing.jsx';
@@ -106,7 +106,7 @@ export default function App() {
               {['assessor', 'lead', 'admin'].map((k) => <option key={k} value={k}>{ROLES[k].name}</option>)}
             </optgroup>
           </select>
-          <button className="btn ghost sm" style={{ marginTop: 6 }} onClick={() => { setRole(null); window.location.hash = ''; }}>Sign out</button>
+          <button className="btn ghost sm" style={{ marginTop: 6 }} onClick={() => { setRole(null); window.location.hash = ''; }}><LogOut size={14} /> Sign out</button>
         </div>
       </aside>
       <main className="main">{page}</main>

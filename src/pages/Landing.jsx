@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Building2, ShieldCheck } from 'lucide-react';
-import { ROLES, STAGES } from '../data/lifecycle.js';
+import { Building2, Check, FileCheck2, LockKeyhole, ShieldCheck, UserRoundCheck } from 'lucide-react';
+import { ROLES } from '../data/lifecycle.js';
 import { useStore } from '../store/store.jsx';
 
 const OPTIONS = [
@@ -40,12 +40,36 @@ export default function Landing() {
       </div>
 
       <div className="landing-r">
-        <p className="mute small" style={{ color: '#A9B1C3' }}>The AI lifecycle</p>
-        <ol className="landing-stages">
-          {STAGES.map((s) => (
-            <li key={s.n}><span className="ls-n">{s.n}</span><span><b>{s.short}</b><span>{s.gate}</span></span></li>
-          ))}
-        </ol>
+        <div className="landing-message">
+          <div className="landing-kicker"><span />Governance workspace</div>
+          <h2>Make responsible AI a practice, not a promise.</h2>
+          <p>Bring evidence, ownership and oversight together in one clear view.</p>
+        </div>
+
+        <div className="governance-preview" aria-hidden="true">
+          <div className="preview-head">
+            <div><span className="preview-eyebrow">REVIEW SNAPSHOT</span><strong>AI product review</strong></div>
+            <span className="preview-shield"><ShieldCheck size={20} /></span>
+          </div>
+          <div className="preview-product">
+            <span className="preview-product-mark">AI</span>
+            <span><b>Clinical triage assistant</b><small>Internal decision support</small></span>
+          </div>
+          <div className="preview-divider" />
+          <div className="preview-row">
+            <span className="preview-row-icon"><FileCheck2 size={17} /></span>
+            <span><b>Evidence documented</b><small>Records linked to decisions</small></span>
+            <Check className="preview-check" size={17} />
+          </div>
+          <div className="preview-row">
+            <span className="preview-row-icon"><UserRoundCheck size={17} /></span>
+            <span><b>Accountable owner</b><small>Review responsibility assigned</small></span>
+            <Check className="preview-check" size={17} />
+          </div>
+          <div className="preview-status"><span />Ready for governance review</div>
+        </div>
+
+        <div className="landing-footnote"><LockKeyhole size={14} />Private demo workspace</div>
       </div>
     </div>
   );

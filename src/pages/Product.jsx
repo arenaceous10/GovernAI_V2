@@ -420,10 +420,10 @@ function History({ s }) {
         <div style={{ height: 220 }}>
           <ResponsiveContainer>
             <LineChart data={data} margin={{ right: 20 }}>
-              <CartesianGrid stroke="#EBEEF2" vertical={false} />
-              <XAxis dataKey="n" tick={{ fontSize: 12 }} /><YAxis domain={[0, 100]} tick={{ fontSize: 12 }} /><Tooltip />
+              <CartesianGrid stroke="#111111" strokeDasharray="3 3" />
+              <XAxis dataKey="n" tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} /><YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} /><Tooltip />
               <Line dataKey="Score" stroke="#B83A2E" isAnimationActive={false} />
-              <Line dataKey="Controls in place" stroke="#3A46C9" isAnimationActive={false} />
+              <Line dataKey="Controls in place" stroke="var(--accent)" isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
