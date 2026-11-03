@@ -125,7 +125,7 @@ const done = (n, at, tier) => {
     checklist: Object.fromEntries(st.checklist.map((i) => [i, true])),
     evidence: Object.fromEntries(st.evidence.slice(0, Math.max(2, st.evidence.length - 1)).map((i, k) => [i, k % 2 ? { ref: `SharePoint / AI governance / ${i}`, file: '' } : { ref: '', file: file(i) }])),
     approvals: Object.fromEntries(requiredApprovals(n, tier).map((r) => [r, { outcome: 'Approved', comment: '', at }])),
-    log: [{ at, who: 'client', outcome: 'Submitted', comment: '' }, ...requiredApprovals(n, tier).map((r) => ({ at, who: r, as: r, outcome: 'Approved', comment: '', internal: '' }))],
+    log: [{ at, who: 'client', outcome: 'Submitted', comment: '' }, ...requiredApprovals(n, tier).map((r) => ({ at, who: r, as: r, outcome: 'Approved', comment: '' }))],
   };
 };
 const current = (n, mode, tier, at, note) => {
@@ -136,14 +136,14 @@ const current = (n, mode, tier, at, note) => {
     returnNote: mode === 'returned' ? note : '',
     checklist: Object.fromEntries(st.checklist.slice(0, all ? st.checklist.length : Math.ceil(st.checklist.length / 2)).map((i) => [i, true])),
     evidence: Object.fromEntries(st.evidence.slice(0, all ? 3 : 1).map((i) => [i, { ref: '', file: file(i) }])),
-    approvals: mode === 'returned' ? { assessor: { outcome: 'Returned', comment: note, at, internal: 'Second time the data lineage has been missing; flag to the lead if it happens again.' } } : {},
+    approvals: mode === 'returned' ? { assessor: { outcome: 'Returned', comment: note, at } } : {},
     log: all ? [{ at, who: 'client', outcome: 'Submitted', comment: mode === 'submitted' ? 'All items confirmed; evidence attached.' : '' },
       ...(mode === 'returned' ? [{ at, who: 'assessor', as: 'assessor', outcome: 'Returned', comment: note, internal: 'Second time the data lineage has been missing; flag to the lead if it happens again.' }] : [])] : [],
   };
 };
 
 export function buildSeed() {
-  const systems = []; const audit = [];
+  const systems = []; const audit = []; const notes = [];
   const today = new Date();
   DEMOS.forEach((d, i) => {
     const profile = { ...emptyProfile(), ...d.p };
@@ -164,6 +164,15 @@ export function buildSeed() {
     const actions = buildActions(questions, answers, tier, new Date(today.getTime() - (40 - i * 3) * 86400000));
     actions.forEach((a, k) => { if (k % 3 === 0 && stage > 3) a.status = 'Done'; else if (k % 4 === 1) a.status = 'In progress'; a.owner = profile.owner; });
     const id = `sys-${i + 1}`;
+    // internal notes move out of the product into the team-only notes list
+    for (const [n, rec] of Object.entries(stages)) {
+      (rec.log || []).forEach((e, k) => {
+        if (!e.internal) return;
+        const noteId = `note-${id}-${n}-${k}`;
+        notes.push({ id: noteId, productId: id, stage: +n, at: e.at, byRole: e.who, byName: 'Ananya Rao', text: e.internal });
+        delete e.internal; e.noteId = noteId;
+      });
+    }
     systems.push({
       id, code: `AI-2026-${String(i + 1).padStart(3, '0')}`, clientId: d.client,
       name: profile.name, bu: profile.bu, owner: profile.owner, description: profile.description,
@@ -179,5 +188,5 @@ export function buildSeed() {
     for (const n of Object.keys(stages)) if (stages[n].status === 'approved') audit.push({ at: stages[n].approvedAt, actor: 'assessor', action: 'Stage approved', target: id, detail: `Stage ${n}` });
   });
   audit.sort((a, b) => b.at.localeCompare(a.at));
-  return { systems, audit, clients: DEMO_CLIENTS.map((c) => ({ ...c })), users: DEMO_USERS.map((u) => ({ ...u })) };
+  return { systems, audit, notes, clients: DEMO_CLIENTS.map((c) => ({ ...c })), users: DEMO_USERS.map((u) => ({ ...u })) };
 }

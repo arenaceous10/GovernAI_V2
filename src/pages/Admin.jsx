@@ -9,8 +9,74 @@ import { useStore } from '../store/store.jsx';
 
 const emailOk = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 
+const STATUS_TONE = { active: 'good', pending: 'warn', disabled: 'bad' };
+const STATUS_NAME = { active: 'Active', pending: 'Waiting for approval', disabled: 'Turned off' };
+
+// Signed-in mode: people create their own accounts; the administrator approves them and sets role and organisation.
+function PersonRow({ u, clients, meId, onSave }) {
+  const [role, setRole] = useState(u.role || (u.side === 'team' ? u.requestedRole || 'assessor' : 'client'));
+  const [clientId, setClientId] = useState(u.clientId || '');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const self = u.id === meId;
+  const changed = role !== u.role || (role === 'client' && clientId !== (u.clientId || ''));
+  const save = async (patch) => { setBusy(true); setErr(await onSave(u.id, patch)); setBusy(false); };
+  const valid = role !== 'client' || clientId;
+  return (
+    <tr>
+      <td><b style={{ fontWeight: 500 }}>{u.name}</b><div className="xs mute">{u.email}</div></td>
+      <td className="small">{u.side === 'team' ? `Governance team${u.requestedRole ? ` (asked for ${ROLES[u.requestedRole]?.name.toLowerCase()})` : ''}` : `Client${u.company ? `: ${u.company}` : ''}`}</td>
+      <td>
+        <select className="input" aria-label={`Role for ${u.name}`} style={{ width: 190, padding: '5px 8px' }} value={role} disabled={self || busy} onChange={(e) => setRole(e.target.value)}>
+          {Object.entries(ROLES).map(([k, r]) => <option key={k} value={k}>{r.name}</option>)}
+        </select>
+        {role === 'client' && (
+          <select className="input" aria-label={`Organisation for ${u.name}`} style={{ width: 190, padding: '5px 8px', marginTop: 6 }} value={clientId} disabled={self || busy} onChange={(e) => setClientId(e.target.value)}>
+            <option value="">Choose organisation…</option>
+            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        )}
+      </td>
+      <td><Pill tone={STATUS_TONE[u.status]}>{STATUS_NAME[u.status]}</Pill>{err && <div className="xs tone-bad" style={{ marginTop: 4 }}>{err}</div>}</td>
+      <td>
+        {self ? <span className="xs mute">You</span> : (
+          <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+            {u.status !== 'active' && <button className="btn primary sm" disabled={busy || !valid} onClick={() => save({ role, clientId: role === 'client' ? clientId : null, status: 'active' })}>Approve</button>}
+            {u.status === 'active' && changed && <button className="btn sm" disabled={busy || !valid} onClick={() => save({ role, clientId: role === 'client' ? clientId : null })}>Save</button>}
+            {u.status === 'active' && <button className="btn ghost sm" disabled={busy} onClick={() => save({ status: 'disabled' })}>Turn off</button>}
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function People() {
+  const { state, updatePerson, me } = useStore();
+  const pending = state.users.filter((u) => u.status === 'pending');
+  const rest = state.users.filter((u) => u.status !== 'pending');
+  const table = (rows) => (
+    <div className="table-wrap">
+      <table className="table">
+        <thead><tr><th>Person</th><th>Signed up as</th><th>Role and organisation</th><th>Access</th><th /></tr></thead>
+        <tbody>{rows.map((u) => <PersonRow key={`${u.id}-${u.status}-${u.role}-${u.clientId}`} u={u} clients={state.clients} meId={me?.id} onSave={updatePerson} />)}</tbody>
+      </table>
+    </div>
+  );
+  return (
+    <>
+      <Panel title="Waiting for approval" sub="Governance team accounts, and people joining an organisation that already exists." style={{ marginTop: 16 }}>
+        {pending.length ? table(pending) : <div className="empty-sm">No one is waiting.</div>}
+      </Panel>
+      <Panel title="People" sub="Everyone signs up themselves. Roles are set here, and nobody can change their own." style={{ marginTop: 16 }}>
+        {rest.length ? table(rest) : <div className="empty-sm">No one yet.</div>}
+      </Panel>
+    </>
+  );
+}
+
 export function AdminClients() {
-  const { state, addClient, addUser, removeUser } = useStore();
+  const { state, addClient, addUser, removeUser, sync } = useStore();
   const [c, setC] = useState({ name: '', sector: '', contact: '' });
   const [u, setU] = useState({ name: '', email: '', role: 'client', clientId: state.clients[0]?.id || '' });
   const [err, setErr] = useState('');
@@ -40,7 +106,7 @@ export function AdminClients() {
           </div>
         </Panel>
       </div>
-      <Panel title="Users" style={{ marginTop: 16 }}>
+      {sync.mode === 'cloud' ? <People /> : <Panel title="Users" style={{ marginTop: 16 }}>
         <div className="table-wrap">
           <table className="table">
             <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Organisation</th><th /></tr></thead>
@@ -67,8 +133,7 @@ export function AdminClients() {
             : <div className="small mute" style={{ paddingBottom: 10 }}>Governance team users see all clients.</div>}
         </div>
         <button className="btn primary" style={{ marginTop: 12 }} onClick={onAddUser}>Add user</button>
-        
-      </Panel>
+      </Panel>}
     </div>
   );
 }

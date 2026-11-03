@@ -144,7 +144,8 @@ function SignOffs({ s, n, rec }) {
 
 // Who did what on this stage. Internal notes only for the governance team.
 function Activity({ rec }) {
-  const { role } = useStore();
+  const { role, state } = useStore();
+  const noteText = (e) => (e.noteId ? state.notes?.find((x) => x.id === e.noteId)?.text : e.internal);
   const team = CAN.internal(role);
   const items = [...(rec.log || [])].reverse();
   if (!items.length) return null;
@@ -158,7 +159,7 @@ function Activity({ rec }) {
               <div className="small"><b style={{ fontWeight: 600 }}>{e.outcome}</b> <span className="mute">by {WHO[e.who] || e.who}</span></div>
               <div className="xs mute num">{fmtDate(e.at)}</div>
               {e.comment && <div className="small act-text">{e.comment}</div>}
-              {team && e.internal && <div className="small act-internal"><Lock size={11} /> {e.internal}</div>}
+              {team && noteText(e) && <div className="small act-internal"><Lock size={11} /> {noteText(e)}</div>}
             </div>
           </li>
         ))}

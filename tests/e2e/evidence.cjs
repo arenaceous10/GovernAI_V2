@@ -5,13 +5,13 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { install, newDb } = require('./fake-supabase.cjs');
+const { install, newDb, seededDb, signIn } = require('./fake-supabase.cjs');
 const CLOUD = process.env.CLOUD === '1';
 const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
 
 (async () => {
   const URL = process.env.URL || (CLOUD ? 'http://localhost:4174/' : 'http://localhost:4173/');
-  const db = newDb();
+  const db = CLOUD ? await seededDb() : newDb();
   db.fixtures = { 'Model_card_v1_final_.txt': 'MODEL-CARD-CONTENT-123', 'model-card-v2.txt': 'SECOND-VERSION-456' };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ev-'));
   const fileA = path.join(dir, 'Model card v1 (final).txt'); fs.writeFileSync(fileA, 'MODEL-CARD-CONTENT-123');
@@ -36,7 +36,8 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   };
 
   await p.goto(URL); await p.evaluate(() => localStorage.clear()); await p.reload(); await W(CLOUD ? 1200 : 300);
-  await p.getByRole('radio', { name: /Client portal/ }).click(); await p.getByRole('button', { name: 'Enter GovernAI', exact: true }).click(); await W(400);
+  if (CLOUD) await signIn(p, 'priya@northwind.test');
+  else { await p.getByRole('radio', { name: /Client portal/ }).click(); await p.getByRole('button', { name: 'Enter GovernAI', exact: true }).click(); await W(400); }
 
   await openProduct('Motor claims triage model');
   const items = await p.locator('.ev-row').allInnerTexts();
@@ -72,8 +73,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
     await W(1500);
     const ctx2 = await b.newContext({ viewport: { width: 1280, height: 860 } }); await install(ctx2, db);
     rp = await ctx2.newPage(); rp.on('pageerror', (e) => errs.push('pageerror2: ' + e.message));
-    await rp.goto(URL); await rp.waitForTimeout(1500);
-    await rp.getByRole('radio', { name: /Governance team/ }).click(); await rp.getByRole('button', { name: 'Enter GovernAI', exact: true }).click(); await rp.waitForTimeout(500);
+    await rp.goto(URL); await rp.waitForTimeout(800); await signIn(rp, 'reviewer@gov.test');
     await rp.goto(URL + '#products'); await rp.waitForTimeout(400); await rp.getByText('Motor claims triage model').first().click(); await rp.waitForTimeout(300);
     await rp.getByRole('tab', { name: 'Lifecycle' }).click(); await rp.waitForTimeout(300);
     const rr = rp.locator('.ev-row', { hasText: target }).first();

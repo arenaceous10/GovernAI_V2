@@ -1,21 +1,32 @@
 const { chromium } = require('playwright');
-const { install, newDb } = require('./fake-supabase.cjs');
+const { install, seededDb, signIn, signOut, EMAIL } = require('./fake-supabase.cjs');
 const CLOUD = process.env.CLOUD === '1';
 (async () => {
   const URL = CLOUD ? 'http://localhost:4174/' : 'http://localhost:4173/'; const seed0 = +process.argv[2] || 1; const runs = +process.argv[3] || 1;
   let s = seed0; const rnd = () => { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; };
   const b = await chromium.launch(); const errs = []; let clicks = 0;
   for (let run = 0; run < runs; run++) {
-    const ctx = await b.newContext({ viewport: { width: rnd() < 0.25 ? 820 : 1440, height: 900 } }); if (CLOUD) await install(ctx, newDb());
+    const ctx = await b.newContext({ viewport: { width: rnd() < 0.25 ? 820 : 1440, height: 900 } }); if (CLOUD) await install(ctx, await seededDb());
     const p = await ctx.newPage();
     p.on('pageerror', e => errs.push(`run${run} pageerror: ${e.message}`));
     p.on('console', m => { if (m.type() === 'error' && !/generate-questions|501|404|Failed to load resource/.test(m.text())) errs.push(`run${run} console: ${m.text()}`); });
     p.on('dialog', d => d.dismiss());
     await p.goto(URL); await p.evaluate(() => localStorage.clear()); await p.reload(); if (CLOUD) await p.waitForTimeout(700);
     const roles = ['client:northwind', 'client:meridian', 'client:lotus', 'assessor', 'lead', 'admin'];
-    await p.click('.entry-card >> nth=0'); await p.getByRole('button', { name: 'Enter GovernAI' }).click();
+    if (!CLOUD) { await p.click('.entry-card >> nth=0'); await p.getByRole('button', { name: 'Enter GovernAI' }).click(); }
+    let first = true;
     for (const r of roles.sort(() => rnd() - 0.5)) {
-      await p.selectOption('select[aria-label="Switch role"]', r).catch(() => {});
+      if (CLOUD) {
+        if (!first) await signOut(p).catch(async () => { await p.goto(URL); await p.evaluate(() => localStorage.clear()); await p.reload(); });
+        await p.goto(URL + '#dashboard'); first = false;
+        try { await signIn(p, EMAIL[r]); } catch (e) {
+          // the random admin clicks may have turned this account off or changed it: that is correct behaviour
+          const txt = await p.locator('#root').innerText();
+          if (/Access turned off|Waiting for approval/.test(txt)) { await p.getByRole('button', { name: /Sign out/ }).click(); await p.waitForTimeout(300); continue; }
+          errs.push(`run${run} sign-in as ${r} failed: ${txt.slice(0, 120)}`); break;
+        }
+        if (await p.locator('select[aria-label="Switch role"]').count()) errs.push('role switcher visible when signed in');
+      } else await p.selectOption('select[aria-label="Switch role"]', r).catch(() => {});
       await p.waitForTimeout(80);
       const navs = await p.locator('nav.nav button').all();
       for (let n = 0; n < navs.length; n++) {

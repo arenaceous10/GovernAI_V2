@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, ClipboardCheck, Database, FilePlus2, History, LayoutDashboard, Library, ListChecks, Settings, Boxes, Users } from 'lucide-react';
+import { LogOut, BookOpen, ClipboardCheck, Database, FilePlus2, History, LayoutDashboard, Library, ListChecks, Settings, Boxes, Users } from 'lucide-react';
 import { ROLES } from './data/lifecycle.js';
 import { useStore, waitingOn } from './store/store.jsx';
 import Landing from './pages/Landing.jsx';
@@ -44,7 +44,7 @@ NAV.lead = NAV.assessor;
 const EXTRA = { client: ['product', 'draft', 'reassess'], assessor: ['product'], lead: ['product'], admin: ['product'] };
 
 export default function App() {
-  const { role, setRole, state, systems, client, sync } = useStore();
+  const { role, setRole, state, systems, client, sync, me, signOut } = useStore();
   const [route, nav] = useHashRoute();
   if (!role) return <Landing />;
 
@@ -92,21 +92,23 @@ export default function App() {
         <div className="side-foot">
           <div className={`sync ${sync.error ? 'bad' : sync.mode === 'local' ? 'warn' : ''}`} role="status">
             <i aria-hidden />
-            {sync.error ? <span>Not saved. <button onClick={sync.retry}>Retry</button></span> : sync.mode === 'local' ? 'Demo data in this browser' : 'Saved to database'}
+            {sync.error ? <span>Not saved. <button onClick={sync.retry}>Retry</button></span> : sync.mode === 'local' ? 'Demo data in this browser' : 'Saved'}
           </div>
-          <div className="who"><span className="xs mute">Signed in as</span><b>{ROLES[role].name}</b></div>
-          <select className="input" aria-label="Switch role" value={switchValue} onChange={(e) => {
-            const [r, org] = e.target.value.split(':');
-            setRole(r, org); nav(ROLES[r].home);
-          }}>
-            <optgroup label="Client portal">
-              {state.clients.map((c) => <option key={c.id} value={`client:${c.id}`}>{c.name}</option>)}
-            </optgroup>
-            <optgroup label="Governance team">
-              {['assessor', 'lead', 'admin'].map((k) => <option key={k} value={k}>{ROLES[k].name}</option>)}
-            </optgroup>
-          </select>
-          <button className="btn ghost sm" style={{ marginTop: 6 }} onClick={() => { setRole(null); window.location.hash = ''; }}>Sign out</button>
+          <div className="who"><span className="xs mute">Signed in as</span><b>{me?.name || ROLES[role].name}</b>{me && <span className="xs mute who-sub">{ROLES[role].name}{role === 'client' && client ? ` · ${client.name}` : ''}</span>}</div>
+          {sync.mode === 'local' && (
+            <select className="input" aria-label="Switch role" value={switchValue} onChange={(e) => {
+              const [r, org] = e.target.value.split(':');
+              setRole(r, org); nav(ROLES[r].home);
+            }}>
+              <optgroup label="Client portal">
+                {state.clients.map((c) => <option key={c.id} value={`client:${c.id}`}>{c.name}</option>)}
+              </optgroup>
+              <optgroup label="Governance team">
+                {['assessor', 'lead', 'admin'].map((k) => <option key={k} value={k}>{ROLES[k].name}</option>)}
+              </optgroup>
+            </select>
+          )}
+          <button className="btn ghost sm" style={{ marginTop: 6 }} onClick={async () => { await signOut(); window.location.hash = ''; }}><LogOut size={14} /> Sign out</button>
         </div>
       </aside>
       <main className="main">{page}</main>

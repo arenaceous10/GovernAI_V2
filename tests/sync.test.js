@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { diffState, isEmptyOps, applyOps, loadAll, resetAll, productRow } from '../src/store/sync.js';
+import { diffState, isEmptyOps, applyOps, loadAll, resetDemo, productRow } from '../src/store/sync.js';
 import { buildSeed } from '../src/store/seed.js';
 
 // Minimal Supabase-style client over plain arrays.
 function fakeDb({ failOn = null } = {}) {
-  const t = { v2_products: [], v2_clients: [], v2_users: [], v2_audit: [], v2_settings: [] }; let id = 1; const keys = { v2_products: 'id', v2_clients: 'id', v2_users: 'id', v2_settings: 'key' };
+  const t = { v2_products: [], v2_clients: [], v2_users: [], v2_audit: [], v2_settings: [], v2_profiles: [], v2_notes: [] }; let id = 1; const keys = { v2_products: 'id', v2_clients: 'id', v2_users: 'id', v2_settings: 'key', v2_notes: 'id', v2_profiles: 'id' };
   const db = {
     t, failOn,
     from(name) {
@@ -57,10 +57,11 @@ test('deleted drafts, added clients and changed settings are detected', () => {
 
 test('save then load gives back the same data', async () => {
   const db = fakeDb(); const s = state();
-  await resetAll(db, s);
+  await resetDemo(db, s);
   const r = await loadAll(db);
   assert.equal(r.empty, false);
-  assert.equal(r.systems.length, s.systems.length); assert.equal(r.clients.length, 3); assert.equal(r.users.length, 6);
+  assert.equal(r.systems.length, s.systems.length); assert.equal(r.clients.length, 3); assert.equal(r.users.length, 0, 'people come from sign-ups, not the demo list');
+  assert.equal(r.notes.length, s.notes.length);
   assert.deepEqual(r.systems.map((x) => x.id).sort(), s.systems.map((x) => x.id).sort());
   assert.deepEqual(r.settings, s.settings);
   assert.equal(r.audit.length, s.audit.length);
@@ -76,7 +77,7 @@ test('product rows carry the columns the database indexes', () => {
 });
 
 test('a failed save can be retried without duplicating audit rows', async () => {
-  const db = fakeDb(); const a = state(); await resetAll(db, a);
+  const db = fakeDb(); const a = state(); await resetDemo(db, a);
   const auditBefore = db.t.v2_audit.length;
   const e = { at: '2026-11-02T11:00:00Z', actor: 'lead', action: 'Approved', target: 'sys-1', detail: '' };
   const b = { ...a, systems: a.systems.map((x, i) => (i === 0 ? { ...x, stage: 3 } : x)), audit: [e, ...a.audit] };
@@ -90,9 +91,27 @@ test('a failed save can be retried without duplicating audit rows', async () => 
   assert.equal(db.t.v2_audit.length, auditBefore + 1);
 });
 
-test('reset wipes old rows first', async () => {
-  const db = fakeDb(); const a = state(); await resetAll(db, a);
-  db.t.v2_products.push({ id: 'sys-old', data: {} }); db.t.v2_audit.push({ id: 999, at: 'x', action: 'old' });
-  await resetAll(db, a);
-  assert.ok(!db.t.v2_products.some((p) => p.id === 'sys-old')); assert.ok(!db.t.v2_audit.some((r) => r.action === 'old'));
+test('demo reset rewrites demo organisations only and keeps people who signed up', async () => {
+  const db = fakeDb(); const a = state(); await resetDemo(db, a);
+  db.t.v2_products.push({ id: 'sys-old', client_id: 'northwind', data: {} });
+  db.t.v2_clients.push({ id: 'cli-real', name: 'Real Co' }); db.t.v2_products.push({ id: 'sys-real', client_id: 'cli-real', data: { id: 'sys-real' } });
+  await resetDemo(db, a);
+  assert.ok(!db.t.v2_products.some((p) => p.id === 'sys-old'), 'stale demo product removed');
+  assert.ok(db.t.v2_products.some((p) => p.id === 'sys-real') && db.t.v2_clients.some((c) => c.id === 'cli-real'), 'real organisation kept');
+});
+
+test('internal notes are saved to their own table, never inside the product', () => {
+  const a = state();
+  assert.ok(a.notes.length > 0, 'seed has an internal note');
+  assert.ok(!JSON.stringify(a.systems).includes(a.notes[0].text), 'note text not in product data');
+  const note = { id: 'note-x', productId: 'sys-1', stage: 4, at: '2026-11-03T10:00:00Z', byRole: 'assessor', text: 'team only' };
+  const ops = diffState(a, { ...a, notes: [...a.notes, note] });
+  assert.deepEqual(ops.notes.map((n) => n.id), ['note-x']);
+  assert.equal(ops.products.length, 0);
+});
+
+test('signed-in mode never writes people from the browser', () => {
+  const a = state();
+  const ops = diffState(a, { ...a, users: [...a.users, { id: 'u9', name: 'X', email: 'x@y.z', role: 'admin' }] }, { users: false });
+  assert.equal(ops.users.length, 0);
 });

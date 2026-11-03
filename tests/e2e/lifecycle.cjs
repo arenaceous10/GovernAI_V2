@@ -1,9 +1,9 @@
 const { chromium } = require('playwright');
-const { install, newDb } = require('./fake-supabase.cjs');
+const { install, newDb, seededDb, signIn, signOut, EMAIL } = require('./fake-supabase.cjs');
 const CLOUD = process.env.CLOUD === '1';
 const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
 (async () => {
-  const URL = process.env.URL || (CLOUD ? 'http://localhost:4174/' : 'http://localhost:4173/'); const db = newDb();
+  const URL = process.env.URL || (CLOUD ? 'http://localhost:4174/' : 'http://localhost:4173/'); const db = CLOUD ? await seededDb() : newDb();
   const SHOT = process.env.SHOT !== '0';
   const b = await chromium.launch(); const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } }); if (CLOUD) await install(ctx, db); const p = await ctx.newPage();
   const errs = []; p.on('pageerror', (e) => errs.push('pageerror: ' + e.message)); p.on('console', (m) => { if (m.type() === 'error' && !/generate-questions|501|404|Failed to load resource/.test(m.text())) errs.push(m.text()); });
@@ -11,16 +11,24 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   const W = (ms = 150) => p.waitForTimeout(ms);
   const body = () => p.locator('#root').innerText();
   const noFractal = async (w) => assert(!/fractal/i.test(await body()), `"Fractal" visible on ${w}`);
-  const role = async (v) => { await p.selectOption('select[aria-label="Switch role"]', v); await W(); };
+  let current = null;
+  const role = async (v) => {
+    if (!CLOUD) { await p.selectOption('select[aria-label="Switch role"]', v); await W(); return; }
+    if (current === EMAIL[v]) { await p.goto(URL + '#dashboard'); await W(); return; }
+    if (current) await signOut(p);
+    await signIn(p, EMAIL[v]); current = EMAIL[v]; await p.goto(URL + '#dashboard'); await W(400);
+  };
   const btn = (name) => p.getByRole('button', { name, exact: true });
   const tab = async (name) => { await p.getByRole('tab', { name }).click(); await W(); };
 
   await p.goto(URL); await p.evaluate(() => localStorage.clear()); await p.reload(); await W(CLOUD ? 900 : 150);
   await S('01-landing'); await noFractal('landing');
   let t = await body(); assert(!/Northwind|Meridian|Lotus/.test(t), 'client names on landing');
-  assert(await btn('Enter GovernAI').isDisabled(), 'enter disabled before choice');
-  await p.getByRole('radio', { name: /Governance team/ }).click(); assert((await body()).includes('Governance lead'), 'team roles shown');
-  await p.getByRole('radio', { name: /Client portal/ }).click(); await btn('Enter GovernAI').click(); await W(300);
+  if (CLOUD) { await role('client:northwind'); } else {
+    assert(await btn('Enter GovernAI').isDisabled(), 'enter disabled before choice');
+    await p.getByRole('radio', { name: /Governance team/ }).click(); assert((await body()).includes('Governance lead'), 'team roles shown');
+    await p.getByRole('radio', { name: /Client portal/ }).click(); await btn('Enter GovernAI').click(); await W(300);
+  }
   await S('02-client-dashboard'); await noFractal('client dashboard');
   t = await body(); assert(t.includes('Motor claims triage model') && !t.includes('CV screening'), 'client scoped to own org');
   assert(/Your AI lifecycle/.test(t) && /Your next steps/.test(t) && /Where your products are/.test(t), 'client home');

@@ -617,3 +617,31 @@ textarea.input.internal { background: #FFFCF3; border-color: #EAD9AE; min-height
 .linkbtn svg { vertical-align: -2px; margin: 0 2px; }
 @media (max-width: 1100px) { .stage-layout { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 560px) { .stage-head { flex-wrap: wrap; } .stage-num { width: 38px; height: 38px; font-size: 1rem; } }
+
+/* ---------- sign in ---------- */
+.auth .landing-l { justify-content: flex-start; }
+.auth-card { margin-top: 48px; max-width: 440px; width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 26px 28px; box-shadow: var(--shadow-up); }
+.auth-card h1 { font-size: 1.45rem; letter-spacing: -0.02em; }
+.auth-card .stack > * + * { margin-top: 14px; }
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; background: var(--paper); border-radius: 10px; padding: 4px; margin-bottom: 18px; }
+.auth-tabs button { all: unset; text-align: center; padding: 8px; border-radius: 8px; font-size: 0.9rem; font-weight: 500; color: var(--mute); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.auth-tabs button[aria-selected='true'] { background: #fff; color: var(--ink); box-shadow: var(--shadow); font-weight: 600; }
+.auth-tabs button:focus-visible { outline: 2px solid var(--accent); }
+.auth-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.auth-sides .entry-card { padding: 12px; gap: 10px; flex-direction: column; }
+.auth-sides .entry-card span span { font-size: 0.8rem; }
+.auth-sides .entry-ico { width: 32px; height: 32px; }
+.pw { position: relative; }
+.pw .input { padding-right: 40px; }
+.pw-eye { all: unset; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); cursor: pointer; color: var(--mute); padding: 4px; border-radius: 6px; display: grid; }
+.pw-eye:hover { color: var(--ink); background: var(--paper); }
+.pw-eye:focus-visible { outline: 2px solid var(--accent); }
+.auth-done { display: grid; gap: 12px; justify-items: start; }
+.auth-ico { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+.auth-tag { color: #fff; font-size: 1.7rem; line-height: 1.2; letter-spacing: -0.02em; max-width: 20ch; }
+.who-sub { display: block; margin-top: 1px; }
+@media (max-width: 1000px) { .auth .landing-r { display: none; } .auth-card { margin-top: 24px; padding: 20px; } }
+@media (max-width: 420px) { .auth-sides { grid-template-columns: 1fr; } }
+.landing .brand { color: var(--ink); }
+.auth-card h1 { margin-top: 0; max-width: none; }
+.auth-card .btn.ghost.sm { padding-left: 0; }
