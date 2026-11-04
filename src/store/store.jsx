@@ -5,6 +5,7 @@ import { buildSeed } from './seed.js';
 import { cloud } from '../lib/cloud.js';
 import { applyOps, diffState, isEmptyOps, loadAll, resetDemo, T, profileFromRow } from './sync.js';
 import { AuthScreen, PendingScreen } from '../pages/Auth.jsx';
+import { removeEvidence } from '../lib/files.js';
 import { requiredApprovals, nextStage, stageOf } from '../data/lifecycle.js';
 import { TIERS, SELECTABLE_FRAMEWORKS } from '../data/frameworks.js';
 
@@ -378,7 +379,58 @@ export function StoreProvider({ children }) {
       saveData: (id, datasets, outputs) => CAN.work(state.role) && updateSystem(id, (x) => ({ ...x, datasets, outputs }), 'Data assets updated', `${datasets.length} datasets`),
 
       // ----- admin -----
-      addClient: (c) => setState((s) => log({ ...s, clients: [...s.clients, { ...c, id: uid('cli') }] }, 'Client added', null, c.name)),
+      addClient: (c) => state.role === 'admin' && setState((s) => log({ ...s, clients: [...s.clients, { ...c, id: uid('cli') }] }, 'Client added', null, c.name)),
+      // Administrator: rename or update an organisation. Its products keep their link, so names follow everywhere.
+      updateClient: (id, patch) => {
+        if (state.role !== 'admin') return 'Not allowed';
+        const name = (patch.name ?? '').trim();
+        if (!name) return 'Enter an organisation name.';
+        if (state.clients.some((c) => c.id !== id && c.name.toLowerCase() === name.toLowerCase())) return 'Another organisation already has this name.';
+        setState((s) => {
+          const before = s.clients.find((c) => c.id === id);
+          if (!before) return s;
+          const after = { ...before, name, sector: (patch.sector ?? before.sector ?? '').trim(), contact: (patch.contact ?? before.contact ?? '').trim() };
+          if (after.name === before.name && after.sector === (before.sector || '') && after.contact === (before.contact || '')) return s;
+          return log({ ...s, clients: s.clients.map((c) => (c.id === id ? after : c)) }, 'Client edited', null, before.name === name ? name : `${before.name} renamed to ${name}`);
+        });
+        return '';
+      },
+      // Administrator: delete an organisation with its products (and their notes and evidence files).
+      // Its people are not deleted: they go back to "waiting for approval" with no organisation.
+      deleteClient: async (id) => {
+        if (state.role !== 'admin') return 'Not allowed';
+        const client = state.clients.find((c) => c.id === id);
+        if (!client) return '';
+        const products = state.systems.filter((x) => x.clientId === id);
+        const pids = new Set(products.map((x) => x.id));
+        const people = state.users.filter((u) => u.clientId === id);
+        if (mode === 'cloud') {
+          try {
+            await queue.current;
+            if (people.length) {
+              const { error } = await cloud.from(T.profiles).update({ client_id: null, status: 'pending', updated_at: nowIso() }).eq('client_id', id);
+              if (error) return error.message;
+            }
+            if (pids.size) {
+              const { error } = await cloud.from(T.notes).delete().in('product_id', [...pids]);
+              if (error) return error.message;
+            }
+          } catch (e) { return e.message || 'Could not delete'; }
+          // evidence files: best effort, a leftover file is harmless
+          for (const x of products) for (const rec of Object.values(x.stages || {})) for (const v of Object.values(rec.evidence || {})) if (v?.path) removeEvidence(v);
+        }
+        setState((s) => {
+          const users = mode === 'cloud'
+            ? s.users.map((u) => (u.clientId === id ? { ...u, clientId: undefined, status: 'pending' } : u))
+            : s.users.map((u) => (u.clientId === id ? { ...u, clientId: undefined } : u));
+          if (mode === 'cloud' && savedRef.current) savedRef.current = { ...savedRef.current, users };
+          return log({
+            ...s, users, clients: s.clients.filter((c) => c.id !== id), systems: s.systems.filter((x) => !pids.has(x.id)),
+            notes: (s.notes || []).filter((n) => !pids.has(n.productId)),
+          }, 'Client deleted', null, `${client.name}: ${products.length} product${products.length === 1 ? '' : 's'} removed, ${people.length} ${people.length === 1 ? 'person' : 'people'} moved to waiting for approval`);
+        });
+        return '';
+      },
       addUser: (u) => setState((s) => log({ ...s, users: [...s.users, { ...u, id: uid('usr') }] }, 'User added', null, `${u.name} (${u.role})`)),
       removeUser: (userId) => setState((s) => log({ ...s, users: s.users.filter((u) => u.id !== userId) }, 'User removed', null, s.users.find((u) => u.id === userId)?.name || '')),
       // Administrator: add, edit, turn off or delete their own questions. Existing assessments keep the copy they were scored with.

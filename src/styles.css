@@ -916,3 +916,9 @@ kbd { font: 600 0.68rem 'DM Sans', sans-serif; padding: 2px 6px; border-radius: 
 .side { z-index: 40; }
 .kpi::after { content: none; }
 .notif-pop { z-index: 80; }
+.row-edit td { vertical-align: top; }
+.row-edit .input { padding: 6px 9px; min-width: 110px; }
+.row-confirm td { background: transparent !important; border-bottom: 1px solid var(--line-2); }
+.confirm-box { border: 1px solid #F0C9C2; background: #FFF7F5; border-radius: 12px; padding: 14px 16px; display: grid; gap: 6px; }
+.confirm-box b { color: var(--bad); }
+.confirm-box p { color: var(--ink-2); }

@@ -76,6 +76,72 @@ function People() {
   );
 }
 
+// One organisation: view, edit in place, or delete with a clear account of what goes with it.
+function ClientRow({ c }) {
+  const { state, updateClient, deleteClient } = useStore();
+  const [mode, setMode] = useState('view');   // view | edit | delete
+  const [f, setF] = useState({ name: c.name, sector: c.sector || '', contact: c.contact || '' });
+  const [typed, setTyped] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const products = state.systems.filter((x) => x.clientId === c.id);
+  const live = products.filter((x) => x.status !== 'Draft').length;
+  const people = state.users.filter((u) => u.clientId === c.id).length;
+  const needsName = products.length > 0 || people > 0;
+  const save = () => { const e = updateClient(c.id, f); setErr(e); if (!e) { setMode('view'); toast(`${f.name.trim()} saved`); } };
+  const remove = async () => { setBusy(true); const e = await deleteClient(c.id); setBusy(false); if (e) setErr(e); else toast(`${c.name} deleted`, 'warn'); };
+  if (mode === 'edit') {
+    return (
+      <tr className="row-edit">
+        <td><input className="input" aria-label="Edit organisation name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></td>
+        <td><input className="input" aria-label="Edit sector" value={f.sector} onChange={(e) => setF({ ...f, sector: e.target.value })} /></td>
+        <td><input className="input" aria-label="Edit main contact" value={f.contact} onChange={(e) => setF({ ...f, contact: e.target.value })} /></td>
+        <td className="num">{live}</td>
+        <td>
+          <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+            <button className="btn primary sm" onClick={save}>Save</button>
+            <button className="btn ghost sm" onClick={() => { setMode('view'); setErr(''); setF({ name: c.name, sector: c.sector || '', contact: c.contact || '' }); }}>Cancel</button>
+          </div>
+          {err && <div className="xs tone-bad" role="alert" style={{ marginTop: 4 }}>{err}</div>}
+        </td>
+      </tr>
+    );
+  }
+  return (
+    <>
+      <tr>
+        <td><b style={{ fontWeight: 500 }}>{c.name}</b></td><td className="small">{c.sector}</td><td className="small">{c.contact}</td><td className="num">{live}</td>
+        <td>
+          <div className="row" style={{ gap: 4, flexWrap: 'nowrap', justifyContent: 'flex-end' }}>
+            <button className="btn ghost sm" aria-label={`Edit ${c.name}`} onClick={() => { setMode('edit'); setErr(''); }}><Pencil size={14} /></button>
+            <button className="btn ghost sm" aria-label={`Delete ${c.name}`} onClick={() => { setMode(mode === 'delete' ? 'view' : 'delete'); setTyped(''); setErr(''); }}><Trash2 size={14} /></button>
+          </div>
+        </td>
+      </tr>
+      {mode === 'delete' && (
+        <tr className="row-confirm">
+          <td colSpan={5}>
+            <div className="confirm-box fade-in" role="alertdialog" aria-label={`Delete ${c.name}`}>
+              <b>Delete {c.name}?</b>
+              <p className="small">
+                {products.length ? `${products.length} product${products.length === 1 ? '' : 's'} and ${products.length === 1 ? 'its' : 'their'} evidence and notes will be deleted. ` : 'It has no products. '}
+                {people ? `${people} ${people === 1 ? 'person goes' : 'people go'} back to waiting for approval, so you can move them to another organisation. ` : ''}
+                The audit log keeps a record. This cannot be undone.
+              </p>
+              {needsName && <label className="field" style={{ maxWidth: 360 }}><span className="small">Type <b>{c.name}</b> to confirm</span><input className="input" aria-label="Type the organisation name to confirm" value={typed} onChange={(e) => setTyped(e.target.value)} /></label>}
+              <div className="row" style={{ marginTop: 10 }}>
+                <button className="btn danger" disabled={busy || (needsName && typed.trim() !== c.name)} onClick={remove}>{busy ? 'Deleting…' : 'Delete organisation'}</button>
+                <button className="btn ghost" onClick={() => setMode('view')}>Keep it</button>
+              </div>
+              {err && <div className="xs tone-bad" role="alert" style={{ marginTop: 6 }}>{err}</div>}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 export function AdminClients() {
   const { state, addClient, addUser, removeUser, sync } = useStore();
   const [c, setC] = useState({ name: '', sector: '', contact: '' });
@@ -93,10 +159,13 @@ export function AdminClients() {
       <div className="page-head"><div><h1>Clients and users</h1><p>Client users see only their own organisation.</p></div></div>
       <div className="grid g-wide">
         <Panel title="Client organisations">
-          <table className="table">
-            <thead><tr><th>Client</th><th>Sector</th><th>Main contact</th><th>Assessments</th></tr></thead>
-            <tbody>{state.clients.map((x) => <tr key={x.id}><td><b style={{ fontWeight: 500 }}>{x.name}</b></td><td className="small">{x.sector}</td><td className="small">{x.contact}</td><td className="num">{count(x.id)}</td></tr>)}</tbody>
-          </table>
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>Client</th><th>Sector</th><th>Main contact</th><th>Products</th><th /></tr></thead>
+              <tbody>{state.clients.map((x) => <ClientRow key={x.id} c={x} />)}</tbody>
+            </table>
+          </div>
+          {state.clients.length === 0 && <div className="empty-sm">No client organisations yet.</div>}
         </Panel>
         <Panel title="Add a client">
           <div className="stack">
