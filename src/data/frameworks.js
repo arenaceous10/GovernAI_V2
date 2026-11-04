@@ -104,13 +104,21 @@ export const SYSTEM_TYPES = [
   { id: 'multiagent', label: 'Multi-agent system', family: 'agent', rating: 3 },
   { id: 'robotics', label: 'Robotics or physical AI', family: 'agent', rating: 3 },
   { id: 'foundation', label: 'Foundation model training or fine-tuning', family: 'genai', rating: 3 },
+  { id: 'other', label: 'Other', family: 'other', rating: 2 },
 ];
 export const familyOf = (id) => SYSTEM_TYPES.find((t) => t.id === id)?.family || id || '';
+export const selectionLabel = (list, id, other = '') => (
+  id === 'other' && other.trim()
+    ? `Other: ${other.trim()}`
+    : list.find((item) => item.id === id)?.label || id || '—'
+);
+export const systemTypeLabel = (id, other = '') => selectionLabel(SYSTEM_TYPES, id, other);
 
 export const SOURCING = [
   { id: 'build', label: 'Built in-house', rating: 1 },
   { id: 'vendor', label: 'Bought from a vendor, with documentation and contract', rating: 2 },
   { id: 'foundation', label: 'Third-party foundation model or API we configure', rating: 3 },
+  { id: 'other', label: 'Other', rating: 2 },
 ];
 
 

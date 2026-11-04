@@ -25,7 +25,7 @@ export const sectionName = (k) => (k === 'DG' ? DG.name : k === 'RAI' ? RAI.name
 export function emptyProfile() {
   return {
     name: '', bu: '', owner: '', description: '',
-    domain: '', systemType: '', sourcing: '', geos: [], data: [],
+    domain: '', domainOther: '', systemType: '', systemTypeOther: '', sourcing: '', sourcingOther: '', geos: [], data: [],
     answers: {}, prohibited: [], annex: 'none', narrowTask: 'no', profiling: 'yes', transparency: [],
   };
 }

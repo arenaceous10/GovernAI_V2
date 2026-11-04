@@ -142,12 +142,17 @@ textarea.input { min-height: 92px; resize: vertical; }
 
 /* wizard */
 .steps { display: flex; gap: 0; margin-bottom: 22px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
-.steps button { all: unset; flex: 1; padding: 12px 14px; font-size: 0.86rem; color: var(--ink-2); border-right: 1px solid var(--line-2); cursor: pointer; display: flex; gap: 8px; align-items: center; }
+.steps button { all: unset; flex: 1; padding: 12px 14px; font-size: 0.86rem; color: var(--ink-2); border-right: 1px solid var(--line-2); cursor: pointer; display: flex; gap: 8px; align-items: center; background: var(--step-bg); }
+.steps button:nth-child(1) { --step-bg: #EAF2FF; --step-accent: #3568B8; }
+.steps button:nth-child(2) { --step-bg: #EAF6EC; --step-accent: #39804B; }
+.steps button:nth-child(3) { --step-bg: #F1ECFA; --step-accent: #7653A6; }
+.steps button:nth-child(4) { --step-bg: #FFF4DF; --step-accent: #A86A12; }
+.steps button:nth-child(5) { --step-bg: #E5F4F2; --step-accent: #24766D; }
 .steps button:last-child { border-right: 0; }
-.steps button[aria-current='step'] { color: var(--ink-2); font-weight: 600; background: var(--accent-soft); }
+.steps button[aria-current='step'] { color: var(--ink); font-weight: 700; box-shadow: inset 0 -3px var(--step-accent); }
 .steps button.done { color: var(--ink-2); }
 .steps .n { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid currentColor; display: grid; place-items: center; font-size: 0.75rem; flex: none; }
-.steps button.done .n { background: var(--ink); color: #fff; border-color: var(--ink); }
+.steps button.done .n { background: var(--step-accent); color: #fff; border-color: var(--step-accent); }
 .steps button:disabled { cursor: not-allowed; }
 .wizard-foot { display: flex; justify-content: space-between; margin-top: 18px; position: sticky; bottom: 0; background: linear-gradient(to top, var(--paper) 70%, transparent); padding: 14px 0 4px; }
 .qnav { position: sticky; top: 20px; }
@@ -805,7 +810,7 @@ kbd { font: 600 0.68rem 'DM Sans', sans-serif; padding: 2px 6px; border-radius: 
 .hero .eyebrow { color: var(--amber); }
 .hero-sub { color: #C6D6EA; margin-top: 6px; max-width: 62ch; }
 .hero .btn.primary { background: var(--amber); border-color: var(--amber); color: var(--navy); box-shadow: 0 8px 20px -8px rgba(255, 184, 28, 0.7); }
-.hero .btn.primary:hover { background: #FFC94D; border-color: #FFC94D; }
+.hero .btn.primary:hover:not(:disabled) { background: #E5E7EB; border-color: #E5E7EB; color: var(--navy); box-shadow: 0 8px 20px -8px rgba(12, 35, 64, 0.35); }
 .particles { display: block; pointer-events: none; }
 
 /* buttons */

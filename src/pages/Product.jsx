@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ArrowLeft, Check, CheckCircle2, ChevronDown, Circle, CornerDownLeft, Download, ExternalLink, Gavel, Link2, Loader2, Lock, Paperclip, RefreshCw, Send, ShieldCheck, X } from 'lucide-react';
 import { uploadEvidence, evidenceUrl, removeEvidence, hasFile, isLink, fmtSize } from '../lib/files.js';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { TIERS, DOMAINS, SYSTEM_TYPES, SOURCING, PRINCIPLES } from '../data/frameworks.js';
+import { TIERS, DOMAINS, SOURCING, PRINCIPLES, selectionLabel, systemTypeLabel } from '../data/frameworks.js';
 import { geoName } from '../data/countries.js';
 import { STAGES, stageOf, requiredApprovals, ROLES, STAGE_STATUS, GATE_STAGES, ON_DEMAND, phaseOf } from '../data/lifecycle.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
@@ -307,9 +307,9 @@ function Assessment({ s, nav }) {
       <Panel title="Product details" right={CAN.work(role) && s.status !== 'Retired' && <button className="btn sm" onClick={() => nav(`/reassess/${s.id}`)}><RefreshCw size={14} /> Re-assess</button>}>
         <dl className="kv">
           <dt>Description</dt><dd>{s.description}</dd>
-          <dt>Domain</dt><dd>{label(DOMAINS, p.domain)}</dd>
-          <dt>Type of AI</dt><dd>{label(SYSTEM_TYPES, p.systemType)}</dd>
-          <dt>Sourcing</dt><dd>{label(SOURCING, p.sourcing)}</dd>
+          <dt>Domain</dt><dd>{selectionLabel(DOMAINS, p.domain, p.domainOther)}</dd>
+          <dt>Type of AI</dt><dd>{systemTypeLabel(p.systemType, p.systemTypeOther)}</dd>
+          <dt>Sourcing</dt><dd>{selectionLabel(SOURCING, p.sourcing, p.sourcingOther)}</dd>
           <dt>Countries</dt><dd>{p.geos.map(geoName).join(', ')}</dd>
           <dt>Frameworks</dt><dd>{fws.map(fwName).join(', ')}</dd>
           <dt>Assessed</dt><dd>{fmtDate(a.at)}</dd>

@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Check, Loader2, Sparkles } from 'lucide-react';
 import {
   ANNEX_III, DATA_CATEGORIES, DOMAINS, FRAMEWORKS, PROFILE_QUESTIONS, PROHIBITED, PRINCIPLES, PRINCIPLE_IDS,
-  SOURCING, SYSTEM_TYPES, TRANSPARENCY, suggestFrameworks,
+  SOURCING, SYSTEM_TYPES, TRANSPARENCY, suggestFrameworks, selectionLabel, systemTypeLabel,
 } from '../data/frameworks.js';
 import { COUNTRIES, REGIONS } from '../data/countries.js';
 import {
@@ -23,8 +23,11 @@ function stepErrors(step, p, fws) {
     if (!p.name.trim()) e.push('Product name');
     if (p.description.trim().length < 20) e.push('A short description (20 characters or more)');
     if (!p.domain) e.push('Business domain');
+    if (p.domain === 'other' && !p.domainOther.trim()) e.push('Specify the business domain');
     if (!p.systemType) e.push('Type of AI');
+    if (p.systemType === 'other' && !p.systemTypeOther.trim()) e.push('Specify the type of AI');
     if (!p.sourcing) e.push('Sourcing');
+    if (p.sourcing === 'other' && !p.sourcingOther.trim()) e.push('Specify the sourcing');
     if (!p.geos.length) e.push('At least one country or region');
     if (!p.data.length) e.push('Data it uses');
   }
@@ -184,6 +187,25 @@ export default function NewAssessment({ nav, existing }) {
             <Field label="Type of AI">{sel('type', SYSTEM_TYPES.map((d) => ({ value: d.id, label: d.label })), p.systemType, (v) => up({ systemType: v }))}</Field>
             <Field label="Sourcing">{sel('sourcing', SOURCING.map((d) => ({ value: d.id, label: d.label })), p.sourcing, (v) => up({ sourcing: v }))}</Field>
           </div>
+          {(p.domain === 'other' || p.systemType === 'other' || p.sourcing === 'other') && (
+            <div className="grid g3" style={{ marginTop: 14 }}>
+              {p.domain === 'other' && (
+                <Field label="Specify the business domain">
+                  <input className="input" value={p.domainOther} onChange={(e) => up({ domainOther: e.target.value })} placeholder="Describe the business domain" />
+                </Field>
+              )}
+              {p.systemType === 'other' && (
+                <Field label="Specify the type of AI">
+                  <input className="input" value={p.systemTypeOther} onChange={(e) => up({ systemTypeOther: e.target.value })} placeholder="Describe the type of AI" />
+                </Field>
+              )}
+              {p.sourcing === 'other' && (
+                <Field label="Specify the sourcing">
+                  <input className="input" value={p.sourcingOther} onChange={(e) => up({ sourcingOther: e.target.value })} placeholder="Describe how the AI is sourced" />
+                </Field>
+              )}
+            </div>
+          )}
           <div style={{ marginTop: 14 }}>
             <label className="field"><span>Countries where it is used or affects people</span></label>
             <Combobox label="Countries" options={GEO_OPTIONS} value={p.geos} onChange={(v) => up({ geos: v })} placeholder="Search countries" />
@@ -297,7 +319,9 @@ export default function NewAssessment({ nav, existing }) {
         <Panel>
           <dl className="kv">
             <dt>Product</dt><dd>{p.name}</dd>
-            <dt>Type of AI</dt><dd>{SYSTEM_TYPES.find((t) => t.id === p.systemType)?.label}</dd>
+            <dt>Business domain</dt><dd>{selectionLabel(DOMAINS, p.domain, p.domainOther)}</dd>
+            <dt>Type of AI</dt><dd>{systemTypeLabel(p.systemType, p.systemTypeOther)}</dd>
+            <dt>Sourcing</dt><dd>{selectionLabel(SOURCING, p.sourcing, p.sourcingOther)}</dd>
             <dt>Frameworks</dt><dd>{fws.map(fwName).join(', ')}</dd>
             <dt>Questions</dt><dd>{answered} of {questions.length} answered ({questions.filter((q) => q.kind === 'core').length} standard, {questions.filter((q) => q.kind !== 'core').length} tailored)</dd>
           </dl>
