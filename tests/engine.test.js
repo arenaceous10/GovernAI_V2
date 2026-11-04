@@ -128,7 +128,7 @@ test('tier cut-offs follow the frameworks; the strictest wins', () => {
 
 test('every AI product type maps to a family used by the tailoring rules', () => {
   for (const t of SYSTEM_TYPES) {
-    assert.ok(['rules', 'ml', 'vision', 'genai', 'agent'].includes(t.family), t.id);
+    assert.ok(['rules', 'ml', 'vision', 'genai', 'agent', 'other'].includes(t.family), t.id);
     const f = profileFlags({ ...emptyProfile(), systemType: t.id });
     assert.equal(f.systemType, t.family);
   }
