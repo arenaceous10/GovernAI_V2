@@ -340,6 +340,17 @@ export function StoreProvider({ children }) {
       addClient: (c) => setState((s) => log({ ...s, clients: [...s.clients, { ...c, id: uid('cli') }] }, 'Client added', null, c.name)),
       addUser: (u) => setState((s) => log({ ...s, users: [...s.users, { ...u, id: uid('usr') }] }, 'User added', null, `${u.name} (${u.role})`)),
       removeUser: (userId) => setState((s) => log({ ...s, users: s.users.filter((u) => u.id !== userId) }, 'User removed', null, s.users.find((u) => u.id === userId)?.name || '')),
+      // Administrator: add, edit, turn off or delete their own questions. Existing assessments keep the copy they were scored with.
+      saveCustomQuestion: (q) => state.role === 'admin' && setState((s) => {
+        const list = s.settings.customQuestions || [];
+        const exists = list.some((x) => x.id === q.id);
+        const item = { ...q, id: q.id || `CQ-${Date.now().toString(36).toUpperCase()}`, updatedAt: nowIso(), by: s.me?.name || null };
+        const next = exists ? list.map((x) => (x.id === q.id ? item : x)) : [...list, item];
+        return log({ ...s, settings: { ...s.settings, customQuestions: next } }, exists ? 'Question edited' : 'Question added', null, `${item.id}: ${item.q}`);
+      }),
+      removeCustomQuestion: (id) => state.role === 'admin' && setState((s) => log({
+        ...s, settings: { ...s.settings, customQuestions: (s.settings.customQuestions || []).filter((x) => x.id !== id) },
+      }, 'Question deleted', null, id)),
       setOverride: (qid, o) => setState((s) => log({ ...s, bankOverrides: { ...s.bankOverrides, [qid]: o } }, 'Question wording edited', null, qid)),
       clearOverride: (qid) => setState((s) => {
         const b = { ...s.bankOverrides }; delete b[qid];

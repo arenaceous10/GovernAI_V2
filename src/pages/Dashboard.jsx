@@ -251,7 +251,7 @@ function AdminHome({ nav }) {
   const byRole = Object.keys(ROLES).map((r) => ({ r, n: state.users.filter((u) => u.role === r).length }));
   const links = [
     { to: '/admin', icon: Users, title: 'Clients and users', text: `${state.clients.length} clients, ${state.users.length} users` },
-    { to: '/bank', icon: Library, title: 'Question bank', text: `${QUESTIONS.length} questions` },
+    { to: '/bank', icon: Library, title: 'Question bank', text: `${QUESTIONS.length + (state.settings.customQuestions || []).length} questions` },
     { to: '/settings', icon: Settings, title: 'Settings', text: 'Risk cut-offs, review cycles, demo data' },
     { to: '/audit', icon: History, title: 'Audit log', text: `${state.audit.length} entries` },
   ];
@@ -262,7 +262,7 @@ function AdminHome({ nav }) {
         <Kpi icon={Users} value={state.clients.length} label="Clients" onClick={() => nav('/admin')} />
         <Kpi icon={Users} value={state.users.length} label="Users" onClick={() => nav('/admin')} />
         <Kpi icon={Boxes} value={live(systems).length} label="Live AI products" onClick={() => nav('/products')} />
-        <Kpi icon={Library} value={QUESTIONS.length} label="Questions in the bank" onClick={() => nav('/bank')} />
+        <Kpi icon={Library} value={QUESTIONS.length + (state.settings.customQuestions || []).length} label="Questions in the bank" onClick={() => nav('/bank')} />
       </div>
       <div className="grid g-wide section">
         <div className="link-grid">

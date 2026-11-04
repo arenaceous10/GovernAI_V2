@@ -168,8 +168,22 @@ export function freeze(q, profile, source, why = '', overrides = {}) {
   };
 }
 
-export function fixedQuestions(profile, fws, overrides = {}) {
-  return QUESTIONS.filter((q) => q.kind === 'core' && inScope(q, fws)).map((q) => freeze(q, profile, 'fixed', '', overrides));
+// Questions an administrator added (settings.customQuestions). Same shape and scoring as the built-in bank;
+// tailored-pool ones are eligible for every use case and ranked by weight and description keywords.
+export const CUSTOM_PREFIX = 'CQ-';
+export function customBank(custom = []) {
+  return (Array.isArray(custom) ? custom : []).filter((c) => c && c.active !== false && c.q && Array.isArray(c.options) && c.options.length === 4 && c.section)
+    .map((c) => ({
+      id: c.id, kind: c.kind === 'adaptive' ? 'adaptive' : 'core', weight: [1, 2, 3].includes(+c.weight) ? +c.weight : 2,
+      topic: c.topic || 'Custom question', maps: { [c.section]: c.ref || 'Custom' }, principle: c.principle || 'accountability',
+      q: c.q, options: c.options.map(String), na: c.na || null, action: c.action || `Address: ${c.topic || c.q}`,
+      when: () => true, rel: () => 3, kw: (c.keywords || []).map((k) => String(k).toLowerCase()).filter(Boolean), custom: true,
+    }));
+}
+const bankWith = (custom) => [...QUESTIONS, ...customBank(custom)];
+
+export function fixedQuestions(profile, fws, overrides = {}, custom = []) {
+  return bankWith(custom).filter((q) => q.kind === 'core' && inScope(q, fws)).map((q) => freeze(q, profile, 'fixed', '', overrides));
 }
 
 export function adaptiveTarget(fixedCount) {
@@ -178,10 +192,10 @@ export function adaptiveTarget(fixedCount) {
 
 // Rule-based tailoring: eligible questions are ranked by relevance; slots are shared out
 // round-robin across the sections in scope so none is left without tailored questions.
-export function rankAdaptive(profile, fws) {
+export function rankAdaptive(profile, fws, custom = []) {
   const flags = profileFlags(profile);
   const desc = (profile.description || '').toLowerCase();
-  return QUESTIONS.filter((q) => q.kind === 'adaptive' && inScope(q, fws) && q.when(flags))
+  return bankWith(custom).filter((q) => q.kind === 'adaptive' && inScope(q, fws) && q.when(flags))
     .map((q) => {
       const kwHits = (q.kw || []).filter((k) => desc.includes(k));
       const score = q.rel(flags) + q.weight * 1.5 + kwHits.length * 3 + (flags.highRisk ? q.weight : 0);
@@ -190,8 +204,8 @@ export function rankAdaptive(profile, fws) {
     .sort((a, b) => b.score - a.score || a.q.id.localeCompare(b.q.id));
 }
 
-export function selectAdaptive(profile, fws, count, overrides = {}, exclude = new Set()) {
-  const ranked = rankAdaptive(profile, fws).filter((r) => !exclude.has(r.q.id));
+export function selectAdaptive(profile, fws, count, overrides = {}, exclude = new Set(), custom = []) {
+  const ranked = rankAdaptive(profile, fws, custom).filter((r) => !exclude.has(r.q.id));
   const lanes = sectionOrder(fws).map((fw) => ranked.filter((r) => r.q.maps[fw]));
   const picked = []; const seen = new Set();
   let progress = true;
@@ -206,10 +220,10 @@ export function selectAdaptive(profile, fws, count, overrides = {}, exclude = ne
   return picked.map((r) => freeze(r.q, profile, 'rules', r.why, overrides));
 }
 
-export function buildQuestionnaire(profile, fws, overrides = {}) {
-  const fixed = fixedQuestions(profile, fws, overrides);
+export function buildQuestionnaire(profile, fws, overrides = {}, custom = []) {
+  const fixed = fixedQuestions(profile, fws, overrides, custom);
   const target = adaptiveTarget(fixed.length);
-  const adaptive = selectAdaptive(profile, fws, target, overrides);
+  const adaptive = selectAdaptive(profile, fws, target, overrides, new Set(), custom);
   return { fixed, adaptive, target };
 }
 

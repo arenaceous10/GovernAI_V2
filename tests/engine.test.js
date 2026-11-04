@@ -134,3 +134,25 @@ test('every AI product type maps to a family used by the tailoring rules', () =>
   }
   assert.ok(profileFlags({ ...emptyProfile(), systemType: 'chatbot' }).chat);
 });
+
+test('admin questions join the questionnaire, are scored by option position and respect scope', async () => {
+  const { customBank } = await import('../src/engine/engine.js');
+  const custom = [
+    { id: 'CQ-1', section: 'GDPR', kind: 'core', weight: 3, topic: 'Vendor DPA', principle: 'privacy', q: 'Is a DPA signed with every vendor?', options: ['No', 'Some', 'Most', 'All, reviewed yearly'], action: 'Sign DPAs.' },
+    { id: 'CQ-2', section: 'RAI', kind: 'core', weight: 2, topic: 'Ethics board', principle: 'accountability', q: 'Has the ethics board seen it?', options: ['No', 'Informally', 'Yes', 'Yes, minuted'], active: false },
+    { id: 'CQ-3', section: 'RAI', kind: 'adaptive', weight: 3, topic: 'Vendor exit', principle: 'robustness', q: 'Is there a vendor exit plan?', options: ['No', 'Idea', 'Written', 'Tested'], keywords: ['vendor'] },
+  ];
+  assert.equal(customBank(custom).length, 2, 'turned-off question left out');
+  const p = base({ description: 'Vendor model for claims' });
+  const euOnly = fixedQuestions(p, ['EU_AI_ACT'], {}, custom).map((q) => q.id);
+  assert.ok(!euOnly.includes('CQ-1'), 'GDPR question not asked when GDPR is out of scope');
+  const withGdpr = fixedQuestions(p, ['EU_AI_ACT', 'GDPR'], {}, custom);
+  const cq = withGdpr.find((q) => q.id === 'CQ-1');
+  assert.ok(cq && cq.options.length === 4 && cq.principle === 'privacy', 'GDPR question asked when in scope');
+  const { fixed, adaptive } = buildQuestionnaire(p, ['EU_AI_ACT', 'GDPR'], {}, custom);
+  const qs = [...fixed, ...adaptive];
+  const all = Object.fromEntries(qs.map((q) => [q.id, q.id === 'CQ-1' ? 3 : 0]));
+  const low = Object.fromEntries(qs.map((q) => [q.id, 0]));
+  const r1 = scoreAssessment(p, ['EU_AI_ACT', 'GDPR'], qs, all); const r0 = scoreAssessment(p, ['EU_AI_ACT', 'GDPR'], qs, low);
+  assert.ok(r1.principles.privacy.readiness > r0.principles.privacy.readiness, 'strongest option raises privacy readiness');
+});

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Pencil, RotateCcw, Trash2 } from 'lucide-react';
+import { Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { FRAMEWORKS, SELECTABLE_FRAMEWORKS, PRINCIPLES, TIER_CUTOFFS } from '../data/frameworks.js';
 import { QUESTIONS, LEVEL_NAMES } from '../data/questionBank.js';
 import { ROLES } from '../data/lifecycle.js';
@@ -181,22 +181,131 @@ function BankRow({ q }) {
   );
 }
 
+const BLANK_Q = { section: 'RAI', ref: '', topic: '', principle: 'accountability', kind: 'core', weight: 2, q: '', options: ['', '', '', ''], naOn: false, na: '', action: '', keywords: '' };
+const WEIGHTS = [[3, 'Critical'], [2, 'Standard'], [1, 'Supporting']];
+
+// Add or edit an administrator's own question. Scoring comes from the option position, as for every question.
+function QuestionForm({ initial, onSave, onCancel }) {
+  const [f, setF] = useState(() => (initial ? { ...BLANK_Q, ...initial, naOn: !!initial.na, keywords: (initial.keywords || []).join(', ') } : BLANK_Q));
+  const [tried, setTried] = useState(false);
+  const up = (p) => setF((x) => ({ ...x, ...p }));
+  const missing = [
+    !f.q.trim() && 'the question',
+    f.options.some((o) => !o.trim()) && 'all four options',
+    new Set(f.options.map((o) => o.trim().toLowerCase())).size < 4 && f.options.every((o) => o.trim()) && 'four different options',
+    !f.topic.trim() && 'a short topic',
+    f.naOn && !f.na.trim() && 'the "Not applicable" wording',
+  ].filter(Boolean);
+  const save = () => {
+    setTried(true);
+    if (missing.length) return;
+    onSave({
+      id: initial?.id, active: initial?.active !== false, section: f.section, ref: f.ref.trim(), topic: f.topic.trim(), principle: f.principle,
+      kind: f.kind, weight: +f.weight, q: f.q.trim(), options: f.options.map((o) => o.trim()), na: f.naOn ? f.na.trim() : '',
+      action: f.action.trim(), keywords: f.keywords.split(',').map((k) => k.trim()).filter(Boolean),
+    });
+  };
+  return (
+    <section className="panel qform fade-in">
+      <div className="panel-head"><div><h2>{initial ? `Edit ${initial.id}` : 'Add a question'}</h2><p>Used in new assessments. Assessments already done keep the wording they were scored with.</p></div></div>
+      <div className="grid g3">
+        <Field label="Section"><select className="input" aria-label="Section" value={f.section} onChange={(e) => up({ section: e.target.value })}>{[...SELECTABLE_FRAMEWORKS, 'RAI', 'DG'].map((k) => <option key={k} value={k}>{sectionName(k)}</option>)}</select></Field>
+        <Field label="Responsible AI principle"><select className="input" aria-label="Responsible AI principle" value={f.principle} onChange={(e) => up({ principle: e.target.value })}>{Object.entries(PRINCIPLES).map(([k, p]) => <option key={k} value={k}>{p.name}</option>)}</select></Field>
+        <Field label="Reference" hint="Article or clause, if any"><input className="input" value={f.ref} onChange={(e) => up({ ref: e.target.value })} placeholder="e.g. Art. 14" /></Field>
+        <Field label="Topic"><input className="input" value={f.topic} onChange={(e) => up({ topic: e.target.value })} placeholder="e.g. Model inventory" /></Field>
+        <Field label="When it is asked">
+          <select className="input" aria-label="When it is asked" value={f.kind} onChange={(e) => up({ kind: e.target.value })}>
+            <option value="core">Every time this section is in scope</option>
+            <option value="adaptive">Tailored pool: picked when relevant</option>
+          </select>
+        </Field>
+        <Field label="Importance"><select className="input" aria-label="Importance" value={f.weight} onChange={(e) => up({ weight: +e.target.value })}>{WEIGHTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></Field>
+      </div>
+      <div className="stack" style={{ marginTop: 14 }}>
+        <Field label="Question" hint="Use {subject} for the people the domain affects, e.g. policyholders."><textarea className="input" rows={2} value={f.q} onChange={(e) => up({ q: e.target.value })} /></Field>
+        <div className="grid g2">
+          {f.options.map((o, i) => (
+            <Field key={i} label={`Option ${i + 1}: ${LEVEL_NAMES[i]} (${[0, 35, 70, 100][i]} points)`}>
+              <input className="input" value={o} onChange={(e) => up({ options: f.options.map((x, k) => (k === i ? e.target.value : x)) })} placeholder={['Weakest answer', 'Partly there', 'In place', 'Strongest answer'][i]} />
+            </Field>
+          ))}
+        </div>
+        <label className="row small" style={{ cursor: 'pointer' }}><input type="checkbox" checked={f.naOn} onChange={(e) => up({ naOn: e.target.checked })} /> Offer "Not applicable" (left out of the score)</label>
+        {f.naOn && <Field label="Not applicable wording"><input className="input" value={f.na} onChange={(e) => up({ na: e.target.value })} placeholder="e.g. We do not use third-party models" /></Field>}
+        <Field label="Action when the answer is weak" hint="Shown to the client as a follow-up action."><input className="input" value={f.action} onChange={(e) => up({ action: e.target.value })} /></Field>
+        {f.kind === 'adaptive' && <Field label="Keywords" hint="Comma separated. Ranked higher when the product description mentions them."><input className="input" value={f.keywords} onChange={(e) => up({ keywords: e.target.value })} placeholder="e.g. chatbot, vendor" /></Field>}
+      </div>
+      {tried && missing.length > 0 && <div className="callout warn small" role="alert" style={{ marginTop: 12 }}>Still needed: {missing.join(', ')}.</div>}
+      <div className="row" style={{ marginTop: 14 }}>
+        <button className="btn primary" onClick={save}>{initial ? 'Save changes' : 'Add question'}</button>
+        <button className="btn" onClick={onCancel}>Cancel</button>
+      </div>
+    </section>
+  );
+}
+
+function CustomRow({ c, onEdit }) {
+  const { saveCustomQuestion, removeCustomQuestion } = useStore();
+  const [confirm, setConfirm] = useState(false);
+  const off = c.active === false;
+  return (
+    <div className={`q-review ${off ? 'is-off' : ''}`}>
+      <div><div className="small">{c.q}</div><div className="xs mute" style={{ marginTop: 4 }}>{c.options.join(' / ')}</div></div>
+      <div className="xs">
+        <div><b>{c.id}</b> {c.kind === 'core' ? 'Asked every time' : 'Tailored pool'}, {WEIGHTS.find(([v]) => v === +c.weight)?.[1].toLowerCase()}</div>
+        <div className="mute">{PRINCIPLES[c.principle]?.name}</div>
+        <div className="mute">{sectionName(c.section)}{c.ref ? ` ${c.ref}` : ''}</div>
+        <div className="row" style={{ gap: 4, marginTop: 4 }}><Pill tone="ok">Added by admin</Pill>{off && <Pill>Turned off</Pill>}</div>
+      </div>
+      <div />
+      <div className="row" style={{ justifyContent: 'flex-end', gap: 4 }}>
+        {confirm ? (
+          <><button className="btn danger sm" onClick={() => removeCustomQuestion(c.id)}>Delete</button><button className="btn ghost sm" onClick={() => setConfirm(false)}>Keep</button></>
+        ) : (
+          <>
+            <button className="btn sm" onClick={onEdit}><Pencil size={13} /> Edit</button>
+            <button className="btn ghost sm" onClick={() => saveCustomQuestion({ ...c, active: off })}>{off ? 'Turn on' : 'Turn off'}</button>
+            <button className="btn ghost sm" aria-label={`Delete ${c.id}`} onClick={() => setConfirm(true)}><Trash2 size={13} /></button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function AdminBank() {
+  const { state, saveCustomQuestion } = useStore();
   const [sec, setSec] = useState('');
   const [kind, setKind] = useState('core');
   const [qq, setQq] = useState('');
-  const rows = useMemo(() => QUESTIONS.filter((q) => (!sec || Object.keys(q.maps)[0] === sec) && (!kind || q.kind === kind)
-    && (!qq || `${q.id} ${q.q} ${q.topic}`.toLowerCase().includes(qq.toLowerCase()))), [sec, kind, qq]);
+  const [form, setForm] = useState(null);   // null | 'new' | question
+  const custom = state.settings.customQuestions || [];
+  const match = (q, section) => (!sec || section === sec) && (!kind || q.kind === kind)
+    && (!qq || `${q.id} ${q.q} ${q.topic}`.toLowerCase().includes(qq.toLowerCase()));
+  const rows = useMemo(() => QUESTIONS.filter((q) => match(q, Object.keys(q.maps)[0])), [sec, kind, qq]); // eslint-disable-line react-hooks/exhaustive-deps
+  const mine = custom.filter((c) => match(c, c.section));
   return (
     <div>
-      <div className="page-head"><div><h1>Question bank</h1><p>Wording edits apply to new assessments.</p></div></div>
-      <Panel>
+      <div className="page-head">
+        <div><h1>Question bank</h1><p>Add your own questions or edit wording. Changes apply to new assessments.</p></div>
+        {!form && <button className="btn primary" onClick={() => setForm('new')}><Plus size={16} /> Add a question</button>}
+      </div>
+      {form && <QuestionForm key={form === 'new' ? 'new' : form.id} initial={form === 'new' ? null : form} onCancel={() => setForm(null)} onSave={(q) => { saveCustomQuestion(q); setForm(null); }} />}
+      <Panel style={form ? { marginTop: 16 } : undefined}>
         <div className="grid g3" style={{ marginBottom: 12 }}>
           <Field label="Section"><select className="input" value={sec} onChange={(e) => setSec(e.target.value)}><option value="">All sections</option>{[...SELECTABLE_FRAMEWORKS, 'RAI', 'DG'].map((k) => <option key={k} value={k}>{sectionName(k)}</option>)}</select></Field>
           <Field label="Type"><select className="input" value={kind} onChange={(e) => setKind(e.target.value)}><option value="core">Fixed</option><option value="adaptive">Tailored pool</option><option value="">Both</option></select></Field>
           <Field label="Search"><input className="input" value={qq} onChange={(e) => setQq(e.target.value)} placeholder="ID, topic or wording" /></Field>
         </div>
-        <div className="xs mute" style={{ marginBottom: 6 }}>{rows.length} question{rows.length === 1 ? '' : 's'}</div>
+        {mine.length > 0 && (
+          <>
+            <h3 style={{ margin: '4px 0 2px' }}>Your questions</h3>
+            <div className="xs mute" style={{ marginBottom: 6 }}>{mine.length} added by an administrator</div>
+            {mine.map((c) => <CustomRow key={c.id} c={c} onEdit={() => { setForm(c); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />)}
+            <hr className="sep" />
+          </>
+        )}
+        <div className="xs mute" style={{ marginBottom: 6 }}>{rows.length} built-in question{rows.length === 1 ? '' : 's'}</div>
         {rows.map((q) => <BankRow key={q.id} q={q} />)}
       </Panel>
     </div>

@@ -88,14 +88,15 @@ export default function NewAssessment({ nav, existing }) {
     if (key === builtKey && questions.length) return;
     setBuilding(true);
     const overrides = state.bankOverrides || {};
-    const fixed = fixedQuestions(prof, fws, overrides);
+    const custom = state.settings.customQuestions || [];
+    const fixed = fixedQuestions(prof, fws, overrides, custom);
     const target = adaptiveTarget(fixed.length);
     let adaptive = []; let src = 'Rule-based tailoring';
     if (state.settings.aiQuestions) {
       const ai = await aiAdaptive(prof, fws, target, fixed);
       if (ai.questions.length) { adaptive = ai.questions; src = `AI (${ai.model || 'Gemini'})`; }
     }
-    if (adaptive.length < target) adaptive = [...adaptive, ...selectAdaptive(prof, fws, target - adaptive.length, overrides)];
+    if (adaptive.length < target) adaptive = [...adaptive, ...selectAdaptive(prof, fws, target - adaptive.length, overrides, new Set(adaptive.map((q) => q.id)), custom)];
     const all = orderQuestions([...fixed, ...adaptive], fws);
     setQuestions(all);
     setAnswers((a) => Object.fromEntries(all.filter((q) => a[q.id] != null).map((q) => [q.id, a[q.id]])));
