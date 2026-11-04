@@ -44,6 +44,12 @@ written by Gemini through `api/generate-questions.js`. Without it, the built-in 
 The permissions are enforced in the store as well as the UI. Internal notes are hidden in the app, but until real sign-in
 replaces the demo database access they are stored in the same product record, so treat them as confidential only after login is added.
 
+## Tools for everyone
+
+- **Deadline radar**: EU AI Act and DPDP dates that apply to each product, with a countdown (`src/data/deadlines.js`).
+- **Notifications**: decisions on your products, submissions for reviewers, pending sign-ups for administrators.
+- **Quick search**: Ctrl K or Cmd K.
+
 ## Flow
 
 1. **Register** (5 steps): product details (dropdowns for domain, 21 AI types, sourcing; searchable list of every country),
@@ -79,6 +85,9 @@ node tests/e2e/lifecycle.cjs               # landing, registration, all 10 stage
 node tests/e2e/drafts-reassess-mobile.cjs  # drafts, re-assessment, mobile layout
 node tests/e2e/random-clicks.cjs 7 3       # random clicks on every page for every role
 node tests/e2e/evidence.cjs                # upload, open as reviewer, replace, remove evidence files
+node tests/e2e/bugs.cjs                    # cloud: double-click approve, access turned off, check again, search, notifications
+node tests/e2e/questions.cjs               # cloud: admin adds questions, client sees them
+node tests/e2e/auth.cjs                    # cloud: sign-up, sign-in, role-based access
 # Cloud mode, against an in-memory Supabase stand-in (tests/e2e/fake-supabase.cjs):
 VITE_SUPABASE_URL=https://fake.supabase.co VITE_SUPABASE_ANON_KEY=test npx vite build --outDir dist-cloudtest
 npx vite preview --outDir dist-cloudtest --port 4174

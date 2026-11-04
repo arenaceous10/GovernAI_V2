@@ -1,9 +1,10 @@
 // Sign in, create an account, reset a password, and the "waiting for approval" screen.
 // Talks to Supabase Auth directly. What an account can see is decided in the database, not here.
 import { useState } from 'react';
-import { Building2, Eye, EyeOff, Loader2, LogOut, MailCheck, ShieldCheck } from 'lucide-react';
+import { Building2, Eye, EyeOff, Loader2, LogOut, MailCheck, RefreshCw, ShieldCheck } from 'lucide-react';
 import { STAGES } from '../data/lifecycle.js';
 import { cloud } from '../lib/cloud.js';
+import { Mark, ParticleField } from '../components/ui.jsx';
 
 const emailOk = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.trim());
 const redirect = () => `${window.location.origin}${window.location.pathname}`;
@@ -25,10 +26,11 @@ function Shell({ children }) {
   return (
     <div className="landing auth">
       <div className="landing-l">
-        <div className="brand" style={{ padding: 0 }}><div className="mark">G</div><div>GovernAI</div></div>
+        <div className="brand" style={{ padding: 0 }}><div className="mark"><Mark /></div><div>GovernAI</div></div>
         <div className="auth-card fade-in">{children}</div>
       </div>
       <div className="landing-r">
+        <ParticleField density={0.00012} />
         <h2 className="auth-tag">Responsible AI governance, from intake to retirement.</h2>
         <p className="mute small" style={{ color: '#A9B1C3', marginTop: 26 }}>The AI lifecycle</p>
         <ol className="landing-stages">
@@ -188,7 +190,8 @@ export function AuthScreen({ mode: initial = 'signin', onDone }) {
   );
 }
 
-export function PendingScreen({ profile, onSignOut }) {
+export function PendingScreen({ profile, onSignOut, onCheck }) {
+  const [checking, setChecking] = useState(false);
   const disabled = profile?.status === 'disabled';
   const broken = profile?.status === 'error' || profile?.status === 'missing';
   return (
@@ -204,7 +207,10 @@ export function PendingScreen({ profile, onSignOut }) {
                 : `${profile?.company || 'Your organisation'} already uses GovernAI, so an administrator needs to approve you before you can see its products.`}
         </p>
         <p className="small mute">Signed in as {profile?.email}</p>
-        <button className="btn" onClick={onSignOut}><LogOut size={15} /> Sign out</button>
+        <div className="row">
+          {!disabled && onCheck && <button className="btn primary" disabled={checking} onClick={async () => { setChecking(true); await onCheck(); setTimeout(() => setChecking(false), 600); }}>{checking ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />} Check again</button>}
+          <button className="btn" onClick={onSignOut}><LogOut size={15} /> Sign out</button>
+        </div>
       </div>
     </Shell>
   );

@@ -1,11 +1,11 @@
+import { useEffect, useRef, useState } from 'react';
 import { TIERS } from '../data/frameworks.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
 
 export function TierBadge({ tier }) {
   const t = TIERS[tier];
   if (!t) return null;
-  const isMinimal = tier === 'minimal';
-  return <span className="tier" style={{ color: isMinimal ? '#FFFFFF' : t.color, background: isMinimal ? 'var(--good)' : t.bg }}>{t.label}</span>;
+  return <span className="tier" style={{ color: t.color, background: t.bg }}>{t.label}</span>;
 }
 
 export function Pill({ tone = 'mute', children }) {
@@ -107,7 +107,7 @@ export function RiskScale({ inherent, residual, tier, compact, cut = { limited: 
     <div className={`scale${compact ? ' compact' : ''}`}>
       <div className="scale-track" style={{ gridTemplateColumns: widths.map((w) => `${w}fr`).join(' ') }}>
         {['minimal', 'limited', 'high', 'unacceptable'].map((k) => (
-          <div key={k} style={{ background: k === 'minimal' ? 'var(--good)' : TIERS[k].bg, color: k === 'minimal' ? '#FFFFFF' : TIERS[k].color, opacity: tier === k ? 1 : 0.7 }}>{compact ? '' : TIERS[k].label}</div>
+          <div key={k} style={{ background: TIERS[k].bg, color: TIERS[k].color, opacity: tier === k ? 1 : 0.7 }}>{compact ? '' : TIERS[k].label}</div>
         ))}
         {!unacceptable && inherent !== residual && (
           <div className="scale-marker ghost" style={{ left: pos(inherent) }}>{!compact && <span>Before controls {inherent}</span>}</div>
@@ -157,4 +157,71 @@ export function NoAccess({ onHome }) {
       <button className="btn primary" style={{ marginTop: 14 }} onClick={onHome}>Go to my home page</button>
     </div>
   );
+}
+
+// Brand mark: a small branching "G" made of nodes, echoing a governed network.
+export function Mark({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" className="mark-svg">
+      <path d="M19 7.5A8 8 0 1 0 20 13h-7" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+      <circle cx="13" cy="13" r="2.2" fill="#FFB81C" />
+    </svg>
+  );
+}
+
+// Number that counts up when it first appears (skipped when the person prefers reduced motion).
+export function CountUp({ value, ms = 700 }) {
+  const n = typeof value === 'number' ? value : null;
+  const [v, setV] = useState(n == null ? value : 0);
+  useEffect(() => {
+    if (n == null) { setV(value); return undefined; }
+    if (typeof window === 'undefined' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || n === 0) { setV(n); return undefined; }
+    let raf; const t0 = performance.now();
+    const step = (t) => { const p = Math.min(1, (t - t0) / ms); setV(Math.round(n * (1 - (1 - p) ** 3))); if (p < 1) raf = requestAnimationFrame(step); };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [n, value, ms]);
+  return <>{v}</>;
+}
+
+// A slow, quiet field of linked points (a governed network). Canvas, paused when off screen or hidden.
+export function ParticleField({ density = 0.00009, className = '' }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const c = ref.current; if (!c) return undefined;
+    const ctx = c.getContext('2d'); if (!ctx) return undefined;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    let w = 0; let h = 0; let pts = []; let raf = 0; let visible = true;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const size = () => {
+      const r = c.getBoundingClientRect(); w = r.width; h = r.height;
+      c.width = w * dpr; c.height = h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const count = Math.max(18, Math.min(90, Math.round(w * h * density)));
+      pts = Array.from({ length: count }, () => ({ x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - 0.5) * 0.18, vy: (Math.random() - 0.5) * 0.18, r: Math.random() * 1.4 + 0.6, gold: Math.random() < 0.12 }));
+    };
+    const draw = () => {
+      ctx.clearRect(0, 0, w, h);
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i];
+        for (let j = i + 1; j < pts.length; j++) {
+          const b = pts[j]; const dx = a.x - b.x; const dy = a.y - b.y; const d2 = dx * dx + dy * dy;
+          if (d2 < 120 * 120) { ctx.strokeStyle = `rgba(120, 190, 235, ${0.16 * (1 - Math.sqrt(d2) / 120)})`; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+        }
+      }
+      for (const p of pts) { ctx.fillStyle = p.gold ? 'rgba(255, 184, 28, 0.9)' : 'rgba(190, 225, 255, 0.75)'; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill(); }
+    };
+    const tick = () => {
+      for (const p of pts) { p.x += p.vx; p.y += p.vy; if (p.x < 0 || p.x > w) p.vx *= -1; if (p.y < 0 || p.y > h) p.vy *= -1; }
+      draw(); if (visible) raf = requestAnimationFrame(tick);
+    };
+    size(); draw();
+    const ro = new ResizeObserver(() => { size(); draw(); }); ro.observe(c);
+    const io = new IntersectionObserver(([e]) => { visible = e.isIntersecting && !document.hidden; cancelAnimationFrame(raf); if (visible && !reduce) raf = requestAnimationFrame(tick); });
+    io.observe(c);
+    const vis = () => { visible = !document.hidden; cancelAnimationFrame(raf); if (visible && !reduce) raf = requestAnimationFrame(tick); };
+    document.addEventListener('visibilitychange', vis);
+    if (!reduce) raf = requestAnimationFrame(tick);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); io.disconnect(); document.removeEventListener('visibilitychange', vis); };
+  }, [density]);
+  return <canvas ref={ref} className={`particles ${className}`} aria-hidden="true" />;
 }

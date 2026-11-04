@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Building2, Check, FileCheck2, LockKeyhole, ShieldCheck, UserRoundCheck } from 'lucide-react';
 import { ROLES } from '../data/lifecycle.js';
 import { useStore } from '../store/store.jsx';
+import { Mark, ParticleField } from '../components/ui.jsx';
 
 const OPTIONS = [
   { id: 'client', icon: Building2, title: 'Client portal', text: 'Register AI products, attach evidence and follow each one through approval.' },
@@ -16,7 +17,7 @@ export default function Landing() {
   return (
     <div className="landing">
       <div className="landing-l">
-        <div className="brand" style={{ padding: 0 }}><div className="mark">G</div><div>GovernAI</div></div>
+        <div className="brand" style={{ padding: 0 }}><div className="mark"><Mark /></div><div>GovernAI</div></div>
         <h1>Responsible AI governance, from intake to retirement.</h1>
         <p className="lead">One place to register AI products, score their risk and approve every lifecycle stage on evidence.</p>
 
@@ -40,6 +41,7 @@ export default function Landing() {
       </div>
 
       <div className="landing-r">
+        <ParticleField density={0.00012} />
         <div className="landing-message">
           <div className="landing-kicker"><span />Governance workspace</div>
           <h2>Make responsible AI a practice, not a promise.</h2>

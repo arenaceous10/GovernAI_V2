@@ -31,9 +31,9 @@ export function PillarRadar({ pillars, height = 240 }) {
     <div style={{ height }}>
       <ResponsiveContainer>
         <RadarChart data={data} outerRadius="70%">
-          <PolarGrid stroke="#111111" strokeDasharray="3 3" />
-          <PolarAngleAxis dataKey="pillar" tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} />
-          <PolarRadiusAxis domain={[0, 100]} ticks={[0, 50, 100]} tick={{ fontSize: 10, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} />
+          <PolarGrid stroke="#E3E8EF" />
+          <PolarAngleAxis dataKey="pillar" tick={{ fontSize: 12, fill: '#4A5568' }} axisLine={{ stroke: '#D5DCE5' }} />
+          <PolarRadiusAxis domain={[0, 100]} ticks={[0, 50, 100]} tick={{ fontSize: 10, fill: '#4A5568' }} axisLine={{ stroke: '#D5DCE5' }} tickLine={{ stroke: '#D5DCE5' }} />
           <Radar dataKey="score" stroke="#2F6B4F" fill="#2F6B4F" fillOpacity={0.22} isAnimationActive={false} />
         </RadarChart>
       </ResponsiveContainer>
@@ -48,9 +48,9 @@ export function PrincipleRadar({ principles, height = 280 }) {
     <div style={{ height }}>
       <ResponsiveContainer>
         <RadarChart data={data} outerRadius="66%">
-          <PolarGrid stroke="#111111" strokeDasharray="3 3" />
-          <PolarAngleAxis dataKey="p" tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} />
-          <PolarRadiusAxis domain={[0, 100]} ticks={[0, 50, 100]} tick={{ fontSize: 10, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} />
+          <PolarGrid stroke="#E3E8EF" />
+          <PolarAngleAxis dataKey="p" tick={{ fontSize: 12, fill: '#4A5568' }} axisLine={{ stroke: '#D5DCE5' }} />
+          <PolarRadiusAxis domain={[0, 100]} ticks={[0, 50, 100]} tick={{ fontSize: 10, fill: '#4A5568' }} axisLine={{ stroke: '#D5DCE5' }} tickLine={{ stroke: '#D5DCE5' }} />
           <Radar name="Risk" dataKey="Risk" stroke="#B83A2E" fill="#B83A2E" fillOpacity={0.12} isAnimationActive={false} />
           <Radar name="Controls in place" dataKey="Readiness" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.2} isAnimationActive={false} />
           <Tooltip formatter={(v) => `${v}/100`} />

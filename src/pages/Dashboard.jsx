@@ -3,9 +3,10 @@ import { TIERS, TIER_ORDER, PRINCIPLE_IDS } from '../data/frameworks.js';
 import { PrincipleRadar } from '../components/Results.jsx';
 import { QUESTIONS } from '../data/questionBank.js';
 import { STAGES, PHASES, phaseOf, ROLES, requiredApprovals } from '../data/lifecycle.js';
-import { Panel, TierBadge, StatusPill, fmtDate } from '../components/ui.jsx';
+import { Panel, TierBadge, StatusPill, fmtDate, CountUp, ParticleField } from '../components/ui.jsx';
 import { StageMini, Ring, stageLabel } from '../components/Stages.jsx';
 import { useStore, waitingOn, CAN } from '../store/store.jsx';
+import { DeadlineRadar } from '../components/Extras.jsx';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const daysSince = (iso) => (iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)) : 0);
@@ -37,7 +38,7 @@ function Kpi({ icon: Icon, value, label, tone, onClick }) {
   return (
     <button type="button" className={`kpi ${tone ? `kpi-${tone}` : ''}`} onClick={onClick} disabled={!onClick}>
       <span className="kpi-ico"><Icon size={18} /></span>
-      <span><span className="kpi-v num">{value}</span><span className="kpi-l">{label}</span></span>
+      <span><span className="kpi-v num"><CountUp value={value} /></span><span className="kpi-l">{label}</span></span>
     </button>
   );
 }
@@ -114,12 +115,12 @@ function ClientHome({ nav }) {
   const prod = mine.filter((s) => s.stage >= 7);
   const returned = work.filter((s) => s.stages[s.stage].status === 'returned');
   const next = [...returned, ...work.filter((s) => s.stages[s.stage].status !== 'returned')];
+  const heroSub = work.length + drafts.length ? `${work.length + drafts.length} ${work.length + drafts.length === 1 ? 'product needs' : 'products need'} your action${returned.length ? `, ${returned.length} returned` : ''}.` : mine.length ? 'You are up to date. The governance team has everything it needs.' : 'Register your first AI product to start its lifecycle.';
   return (
     <div className="fade-in">
-      <div className="page-head">
-        <div><div className="eyebrow">{client?.name}</div><h1>Your AI lifecycle</h1></div>
+      <header className="hero"><ParticleField /><div className="hero-in"><div><div className="eyebrow">{client?.name}</div><h1>Your AI lifecycle</h1><p className="hero-sub">{heroSub}</p></div>
         <button className="btn primary" onClick={() => nav('/new')}><FilePlus2 size={16} /> Register an AI product</button>
-      </div>
+      </div></header>
       <div className="kpis">
         <Kpi icon={ClipboardCheck} value={work.length + drafts.length} label="Need your action" tone={work.length + drafts.length ? 'accent' : ''} />
         <Kpi icon={CornerDownLeft} value={returned.length} label="Returned to you" tone={returned.length ? 'warn' : ''} />
@@ -160,6 +161,10 @@ function ClientHome({ nav }) {
       </section>
 
       <section className="section">
+        <div className="section-head"><h2>Regulatory deadlines</h2><span className="xs mute">Dates that apply to your products</span></div>
+        <div className="panel"><DeadlineRadar systems={live(systems)} nav={nav} /></div>
+      </section>
+      <section className="section">
         <div className="section-head"><h2>Where your products are</h2><button className="btn ghost sm" onClick={() => nav('/products')}>All products <ArrowRight size={14} /></button></div>
         <PipelineBoard systems={systems} nav={nav} highlight={(s) => ['open', 'returned'].includes(s.stages?.[s.stage]?.status) && s.status === 'Active'} />
       </section>
@@ -175,9 +180,10 @@ function ReviewerHome({ nav }) {
   const oldest = mineN.reduce((m, s) => Math.max(m, daysSince(s.stages[s.stage].submittedAt)), 0);
   const returned = all.filter((s) => s.stages?.[s.stage]?.status === 'returned');
   const due = all.filter(overdue);
+  const heroSub = mineN.length ? `${mineN.length} ${mineN.length === 1 ? 'stage is' : 'stages are'} waiting for your review, the oldest for ${oldest} ${oldest === 1 ? 'day' : 'days'}.` : 'Nothing is waiting for your review.';
   return (
     <div className="fade-in">
-      <div className="page-head"><div><div className="eyebrow">Governance team</div><h1>Review workspace</h1></div></div>
+      <header className="hero"><ParticleField /><div className="hero-in"><div><div className="eyebrow">Governance team</div><h1>Review workspace</h1><p className="hero-sub">{heroSub}</p></div></div></header>
       <div className="kpis">
         <Kpi icon={ClipboardCheck} value={mineN.length} label="Waiting for your review" tone={mineN.length ? 'accent' : ''} onClick={() => nav('/queue')} />
         <Kpi icon={Clock} value={mineN.length ? `${oldest}d` : '—'} label="Oldest waiting" tone={oldest > 5 ? 'bad' : oldest > 2 ? 'warn' : ''} />
@@ -187,6 +193,10 @@ function ReviewerHome({ nav }) {
       <section className="section">
         <div className="section-head"><h2>Waiting for your review</h2><span className="xs mute">Oldest first</span></div>
         <ReviewList systems={all} role={role} nav={nav} empty="Nothing waiting for you. New submissions appear here." />
+      </section>
+      <section className="section">
+        <div className="section-head"><h2>Regulatory deadlines</h2><span className="xs mute">Dates that apply to products you oversee</span></div>
+        <div className="panel"><DeadlineRadar systems={live(systems)} nav={nav} /></div>
       </section>
       <section className="section">
         <div className="section-head"><h2>Lifecycle pipeline</h2><span className="xs mute">All clients</span></div>
@@ -204,6 +214,7 @@ function LeadHome({ nav }) {
   const reviewers = all.filter((s) => waitingOn(s).includes('assessor'));
   const high = all.filter((s) => ['high', 'unacceptable'].includes(s.assessment.results.tier));
   const due = all.filter(overdue);
+  const heroSub = gateMine.length ? `${gateMine.length} gate ${gateMine.length === 1 ? 'decision is' : 'decisions are'} waiting for you. ${high.length} live products are high risk or prohibited.` : `No gate decisions waiting. ${high.length} live products are high risk or prohibited.`;
   const matrix = TIER_ORDER.map((t) => ({ t, cells: PHASES.map((ph) => all.filter((s) => s.assessment.results.tier === t && phaseOf(s.stage).id === ph.id).length) }));
   const max = Math.max(1, ...matrix.flatMap((r) => r.cells));
   const avg = (xs) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null);
@@ -213,7 +224,7 @@ function LeadHome({ nav }) {
   }]));
   return (
     <div className="fade-in">
-      <div className="page-head"><div><div className="eyebrow">Governance team</div><h1>Portfolio oversight</h1></div></div>
+      <header className="hero"><ParticleField /><div className="hero-in"><div><div className="eyebrow">Governance team</div><h1>Portfolio oversight</h1><p className="hero-sub">{heroSub}</p></div></div></header>
       <div className="kpis">
         <Kpi icon={ShieldAlert} value={gateMine.length} label="Gate decisions for you" tone={gateMine.length ? 'accent' : ''} onClick={() => nav('/queue')} />
         <Kpi icon={ClipboardCheck} value={reviewers.length} label="With reviewers" />
@@ -238,6 +249,10 @@ function LeadHome({ nav }) {
         </Panel>
       </div>
       <section className="section">
+        <div className="section-head"><h2>Regulatory deadlines</h2><span className="xs mute">Dates that apply to products you oversee</span></div>
+        <div className="panel"><DeadlineRadar systems={live(systems)} nav={nav} /></div>
+      </section>
+      <section className="section">
         <div className="section-head"><h2>Lifecycle pipeline</h2><span className="xs mute">All clients</span></div>
         <PipelineBoard systems={systems} nav={nav} showClient highlight={(s) => waitsFor(s, role)} />
       </section>
@@ -249,6 +264,8 @@ function LeadHome({ nav }) {
 function AdminHome({ nav }) {
   const { state, systems } = useStore();
   const byRole = Object.keys(ROLES).map((r) => ({ r, n: state.users.filter((u) => u.role === r).length }));
+  const pendingN = state.users.filter((u) => u.status === 'pending').length;
+  const heroSub = pendingN ? `${pendingN} ${pendingN === 1 ? 'person is' : 'people are'} waiting for approval.` : 'Everyone who signed up has been reviewed.';
   const links = [
     { to: '/admin', icon: Users, title: 'Clients and users', text: `${state.clients.length} clients, ${state.users.length} users` },
     { to: '/bank', icon: Library, title: 'Question bank', text: `${QUESTIONS.length + (state.settings.customQuestions || []).length} questions` },
@@ -257,7 +274,7 @@ function AdminHome({ nav }) {
   ];
   return (
     <div className="fade-in">
-      <div className="page-head"><div><div className="eyebrow">Administrator</div><h1>Workspace setup</h1></div></div>
+      <header className="hero"><ParticleField /><div className="hero-in"><div><div className="eyebrow">Administrator</div><h1>Workspace setup</h1><p className="hero-sub">{heroSub}</p></div></div></header>
       <div className="kpis">
         <Kpi icon={Users} value={state.clients.length} label="Clients" onClick={() => nav('/admin')} />
         <Kpi icon={Users} value={state.users.length} label="Users" onClick={() => nav('/admin')} />

@@ -6,6 +6,7 @@ import { ROLES } from '../data/lifecycle.js';
 import { sectionName } from '../engine/engine.js';
 import { Field, Panel, Pill } from '../components/ui.jsx';
 import { useStore } from '../store/store.jsx';
+import { toast } from '../components/Extras.jsx';
 
 const emailOk = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 
@@ -20,7 +21,7 @@ function PersonRow({ u, clients, meId, onSave }) {
   const [err, setErr] = useState('');
   const self = u.id === meId;
   const changed = role !== u.role || (role === 'client' && clientId !== (u.clientId || ''));
-  const save = async (patch) => { setBusy(true); setErr(await onSave(u.id, patch)); setBusy(false); };
+  const save = async (patch) => { setBusy(true); const e = await onSave(u.id, patch); setErr(e); setBusy(false); if (!e) toast(patch.status === 'disabled' ? `${u.name}'s access turned off` : patch.status === 'active' ? `${u.name} approved` : 'Access saved'); };
   const valid = role !== 'client' || clientId;
   return (
     <tr>
@@ -290,7 +291,7 @@ export function AdminBank() {
         <div><h1>Question bank</h1><p>Add your own questions or edit wording. Changes apply to new assessments.</p></div>
         {!form && <button className="btn primary" onClick={() => setForm('new')}><Plus size={16} /> Add a question</button>}
       </div>
-      {form && <QuestionForm key={form === 'new' ? 'new' : form.id} initial={form === 'new' ? null : form} onCancel={() => setForm(null)} onSave={(q) => { saveCustomQuestion(q); setForm(null); }} />}
+      {form && <QuestionForm key={form === 'new' ? 'new' : form.id} initial={form === 'new' ? null : form} onCancel={() => setForm(null)} onSave={(q) => { saveCustomQuestion(q); setForm(null); toast(q.id ? 'Question saved' : 'Question added'); }} />}
       <Panel style={form ? { marginTop: 16 } : undefined}>
         <div className="grid g3" style={{ marginBottom: 12 }}>
           <Field label="Section"><select className="input" value={sec} onChange={(e) => setSec(e.target.value)}><option value="">All sections</option>{[...SELECTABLE_FRAMEWORKS, 'RAI', 'DG'].map((k) => <option key={k} value={k}>{sectionName(k)}</option>)}</select></Field>

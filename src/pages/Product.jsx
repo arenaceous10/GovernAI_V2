@@ -10,6 +10,7 @@ import { sectionOf, sectionOrder } from '../engine/engine.js';
 import { downloadReport } from '../engine/report.js';
 import { Panel, Pill, Tabs, TierBadge, fmtDate, StatusPill, Field } from '../components/ui.jsx';
 import { LifecycleRail, Ring } from '../components/Stages.jsx';
+import { toast, ProductDeadlines } from '../components/Extras.jsx';
 import Results, { fwName } from '../components/Results.jsx';
 import DataAssets, { catalogCoverage } from '../components/DataAssets.jsx';
 import LineageGraph from '../components/LineageGraph.jsx';
@@ -45,7 +46,7 @@ function EvidenceItem({ item, value, editable, onSave, systemId, stage }) {
       const up = await uploadEvidence(f, { systemId, stage });
       if (value?.path && value.path !== up.path) removeEvidence(value);
       onSave({ ref: ref.trim(), ...up, at: new Date().toISOString() });
-      setOpen(false);
+      setOpen(false); toast(`${f.name} uploaded`);
     } catch (e) {
       setErr(e.message || 'Upload failed.');
     } finally { setBusy(false); }
@@ -107,7 +108,7 @@ function ReviewBox({ s, n, rec }) {
   if (!mySlot) return null;
   const st = stageOf(n);
   const done = st.checklist.filter((i) => rec.checklist[i]).length + st.evidence.filter((i) => rec.evidence[i]).length;
-  const decide = (outcome) => { reviewStage(s.id, n, mySlot, outcome, comment.trim(), internal.trim()); setComment(''); setInternal(''); };
+  const decide = (outcome) => { reviewStage(s.id, n, mySlot, outcome, comment.trim(), internal.trim()); setComment(''); setInternal(''); toast(outcome === 'Returned' ? `Stage ${n} returned to the client` : `Stage ${n} ${outcome.toLowerCase()}`, outcome === 'Returned' ? 'warn' : 'good'); };
   return (
     <section className="panel decision">
       <div className="decision-head"><Gavel size={16} /> <h2>Your decision</h2></div>
@@ -246,7 +247,7 @@ function StageView({ s, n }) {
           {canEdit && (
             <div className="submit-box">
               <Field label="Note for the reviewer"><input className="input" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
-              <button className="btn primary block" disabled={blockers.length > 0} onClick={() => { submitStage(s.id, n, note.trim()); setNote(''); }}>
+              <button className="btn primary block" disabled={blockers.length > 0} onClick={() => { submitStage(s.id, n, note.trim()); setNote(''); toast(`Stage ${n} sent to the governance team`); }}>
                 <Send size={15} /> {n === 7 ? 'Submit periodic review' : 'Submit for review'}
               </button>
               {blockers.length > 0 && <p className="xs mute">{blockers.join('. ')}.</p>}
@@ -262,7 +263,7 @@ function StageView({ s, n }) {
         {isCurrent && CAN.override(role) && rec.status !== 'approved' && (
           <Panel title="Override gate" sub="Moves the product on without the remaining sign-offs. The reason is recorded.">
             <textarea className="input" rows={2} aria-label="Override reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (at least 15 characters)" />
-            <button className="btn danger" style={{ marginTop: 8 }} disabled={reason.trim().length < 15} onClick={() => { override(s.id, n, reason.trim()); setReason(''); }}>Override</button>
+            <button className="btn danger" style={{ marginTop: 8 }} disabled={reason.trim().length < 15} onClick={() => { override(s.id, n, reason.trim()); setReason(''); toast(`Stage ${n} moved on by override`, 'warn'); }}>Override</button>
           </Panel>
         )}
 
@@ -275,7 +276,7 @@ function StageView({ s, n }) {
                 </select>
               </Field>
               <Field label="What happened"><input className="input" value={event.text} onChange={(e) => setEvent({ ...event, text: e.target.value })} /></Field>
-              <button className="btn" disabled={!event.kind || event.text.trim().length < 5} onClick={() => { startEvent(s.id, event.kind, event.text.trim()); setEvent({ kind: '', text: '' }); }}>
+              <button className="btn" disabled={!event.kind || event.text.trim().length < 5} onClick={() => { startEvent(s.id, event.kind, event.text.trim()); toast({ change: 'Change review started', incident: 'Incident reported', retire: 'Retirement started' }[event.kind]); setEvent({ kind: '', text: '' }); }}>
                 {{ change: 'Start change review', incident: 'Report incident', retire: 'Start retirement', '': 'Start' }[event.kind]}
               </button>
             </div>
@@ -421,8 +422,8 @@ function History({ s }) {
         <div style={{ height: 220 }}>
           <ResponsiveContainer>
             <LineChart data={data} margin={{ right: 20 }}>
-              <CartesianGrid stroke="#111111" strokeDasharray="3 3" />
-              <XAxis dataKey="n" tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} /><YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: '#111111' }} axisLine={{ stroke: '#111111' }} tickLine={{ stroke: '#111111' }} /><Tooltip />
+              <CartesianGrid stroke="#E3E8EF" />
+              <XAxis dataKey="n" tick={{ fontSize: 12, fill: '#4A5568' }} axisLine={{ stroke: '#D5DCE5' }} tickLine={{ stroke: '#D5DCE5' }} /><YAxis domain={[0, 100]} tick={{ fontSize: 12, fill: '#4A5568' }} axisLine={{ stroke: '#D5DCE5' }} tickLine={{ stroke: '#D5DCE5' }} /><Tooltip />
               <Line dataKey="Score" stroke="#B83A2E" isAnimationActive={false} />
               <Line dataKey="Controls in place" stroke="var(--accent)" isAnimationActive={false} />
             </LineChart>
@@ -464,6 +465,7 @@ export default function Product({ id, nav, back }) {
           <div className="hero-stage-name"><span className="stage-chip">{s.stage}</span> {stageOf(s.stage).name}</div>
           <div className="row" style={{ gap: 8, marginTop: 6 }}>
             <StatusPill status={s.status === 'Blocked' || s.status === 'Retired' ? s.status : STAGE_STATUS[rec?.status || 'open']} />
+            <ProductDeadlines s={s} />
             {yourTurn && <span className="your-turn">{CAN.work(role) ? 'Your turn' : 'Needs your review'}</span>}
           </div>
         </div>

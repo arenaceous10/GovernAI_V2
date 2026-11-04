@@ -47,6 +47,9 @@ export const CAN = {
   internal: (role) => role === 'assessor' || role === 'lead' || role === 'admin', // sees internal notes
 };
 
+// The current stage, still with the client (not submitted, approved, retired or blocked).
+const workable = (x, n) => n === x.stage && !['Retired', 'Blocked', 'Draft'].includes(x.status) && ['open', 'returned'].includes(x.stages?.[n]?.status || 'open');
+
 export const newStage = () => ({ status: 'open', checklist: {}, evidence: {}, approvals: {}, note: '' });
 
 // What stops the current stage from being submitted or approved.
@@ -99,10 +102,11 @@ export function StoreProvider({ children }) {
   const queue = useRef(Promise.resolve());
   const lastFetch = useRef(0);
   const userRef = useRef(null);           // signed-in user id, so repeated auth events do not reload
+  const recheck = useRef(null);           // re-reads the signed-in user's access
 
   // ----- cloud: load what this signed-in user may see (row-level security filters it) -----
   const start = useCallback(async (profile) => {
-    setBoot('loading'); setBootError('');
+    setBoot('loading'); setBootError(''); setSyncError('');
     try {
       const remote = await withTimeout(loadAll(cloud), 15000);
       let next = fromRemote(shell(), remote);
@@ -138,6 +142,19 @@ export function StoreProvider({ children }) {
     start(profile);
   }, [start]);
 
+  // Re-read access for the signed-in user (after a refused save, or "Check again" on the waiting screen).
+  recheck.current = async () => {
+    const { data: sess } = await cloud.auth.getSession();
+    if (!sess?.session) return;
+    const { data } = await cloud.from(T.profiles).select('*').eq('id', sess.session.user.id).maybeSingle();
+    const profile = data ? profileFromRow(data) : null;
+    const ok = profile && profile.status === 'active' && profile.role && (profile.role !== 'client' || profile.clientId);
+    const same = ok && auth.profile && profile.role === auth.profile.role && profile.clientId === auth.profile.clientId && auth.phase === 'in';
+    if (same) return;
+    userRef.current = null; savedRef.current = null;
+    onSession(sess.session);
+  };
+
   useEffect(() => {
     if (!cloud) return undefined;
     // Supabase advises not to await its own calls inside this callback, so work is deferred.
@@ -159,7 +176,11 @@ export function StoreProvider({ children }) {
       const ops = diffState(savedRef.current, target, { users: false });
       if (isEmptyOps(ops)) { savedRef.current = target; return; }
       try { await applyOps(cloud, ops); savedRef.current = target; setSyncError(''); }
-      catch (e) { setSyncError(e.message || 'Could not save'); }
+      catch (e) {
+        setSyncError(e.message || 'Could not save');
+        // Refused by the database: access may have been changed or turned off since sign-in.
+        if (/row-level security|permission denied|42501|JWT/i.test(e.message || '')) recheck.current?.();
+      }
     });
     return queue.current;
   }, []);
@@ -191,7 +212,9 @@ export function StoreProvider({ children }) {
 
   const updateSystem = useCallback((id, fn, action, detail) => {
     setState((s) => {
-      const systems = s.systems.map((x) => (x.id === id ? fn(x, s) : x));
+      let changed = false;
+      const systems = s.systems.map((x) => { if (x.id !== id) return x; const y = fn(x, s); if (y !== x) changed = true; return y; });
+      if (!changed) return s;   // a guarded no-op (double click, stale screen) changes nothing and logs nothing
       return action ? log({ ...s, systems }, action, id, typeof detail === 'function' ? detail(s) : detail) : { ...s, systems };
     });
   }, []);
@@ -199,19 +222,18 @@ export function StoreProvider({ children }) {
   const api = useMemo(() => {
     const systems = visibleSystems(state);
     const getSystem = (id) => systems.find((x) => x.id === id);
-    const nextCode = (list) => `AI-${new Date().getFullYear()}-${String(list.length + 1).padStart(3, '0')}`;
+    // Clients only see their own products, so a running number would clash across organisations.
+    const nextCode = (list) => {
+      const taken = new Set(list.map((x) => x.code));
+      for (;;) {
+        const c = `AI-${new Date().getFullYear()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+        if (!taken.has(c)) return c;
+      }
+    };
     const blank = (s, id) => ({
       id, code: nextCode(s.systems), clientId: s.role === 'client' ? s.clientOrg : s.clients[0]?.id, createdAt: nowIso(), createdBy: s.role,
       stage: 1, stages: { 1: newStage() }, status: 'Draft', nextReview: null, actions: [], history: [], events: [], datasets: [], outputs: [], assessment: null,
     });
-    // Internal notes live in their own list (and table) that only the governance team can read.
-    const addNote = (productId, stage, text, then) => {
-      const t = (text || '').trim();
-      if (!t) return then(null);
-      const note = { id: uid('note'), productId, stage, at: nowIso(), byRole: state.role, byName: state.me?.name || null, text: t };
-      setState((s) => ({ ...s, notes: [...(s.notes || []), note] }));
-      return then(note.id);
-    };
     return {
       state, systems, getSystem,
       role: state.role,
@@ -294,39 +316,58 @@ export function StoreProvider({ children }) {
 
       // ----- lifecycle -----
       toggleCheck: (id, n, item) => CAN.work(state.role) && updateSystem(id, (x) => {
+        if (!workable(x, n)) return x;
         const rec = x.stages[n] || newStage();
         return { ...x, stages: { ...x.stages, [n]: { ...rec, checklist: { ...rec.checklist, [item]: !rec.checklist[item] } } } };
       }),
       checkAll: (id, n, items) => CAN.work(state.role) && updateSystem(id, (x) => {
+        if (!workable(x, n)) return x;
         const rec = x.stages[n] || newStage();
         return { ...x, stages: { ...x.stages, [n]: { ...rec, checklist: Object.fromEntries(items.map((i) => [i, true])) } } };
       }),
       setEvidence: (id, n, item, value) => CAN.work(state.role) && updateSystem(id, (x) => {
+        if (!workable(x, n)) return x;
         const rec = x.stages[n] || newStage();
         return { ...x, stages: { ...x.stages, [n]: { ...rec, evidence: { ...rec.evidence, [item]: value } } } };
       }),
-      submitStage: (id, n, note) => CAN.work(state.role) && updateSystem(id, (x) => ({
-        ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...x.stages[n], status: 'submitted', note, submittedAt: nowIso(), approvals: {}, returnNote: '', log: [...(x.stages[n]?.log || []), { at: nowIso(), who: 'client', outcome: 'Submitted', comment: note }] } },
-      }), 'Stage submitted for review', (s) => `Stage ${n}: ${stageOf(n).name}`),
-      reviewStage: (id, n, who, outcome, comment, internal = '') => CAN.review(state.role) && addNote(id, n, internal, (noteId) => updateSystem(id, (x) => {
-        const rec = x.stages[n];
+      submitStage: (id, n, note) => CAN.work(state.role) && updateSystem(id, (x) => {
+        if (!workable(x, n) || stageBlockers(x).length) return x;
+        return { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...x.stages[n], status: 'submitted', note, submittedAt: nowIso(), approvals: {}, returnNote: '', log: [...(x.stages[n]?.log || []), { at: nowIso(), who: 'client', outcome: 'Submitted', comment: note }] } } };
+      }, 'Stage submitted for review', () => `Stage ${n}: ${stageOf(n).name}`),
+      // One update for the decision and its internal note, so a repeated click can neither skip a stage nor leave a stray note.
+      reviewStage: (id, n, who, outcome, comment, internal = '') => CAN.review(state.role) && setState((s) => {
+        const x = s.systems.find((y) => y.id === id);
+        const rec = x?.stages?.[n];
+        if (!x || x.stage !== n || rec?.status !== 'submitted') return s;
+        const waiting = waitingOn(x);
         const need = requiredApprovals(n, x.assessment.results.tier);
         const role = who === 'lead' && !need.includes('lead') ? 'assessor' : who;   // the lead can sign in the reviewer's place
-        const entry = { at: nowIso(), who: state.role, as: role, outcome, comment, ...(noteId ? { noteId } : {}) };
-        const log = [...(rec.log || []), entry];
+        if (!waiting.includes(role) || (who !== s.role)) return s;
+        const text = (internal || '').trim();
+        const note = text ? { id: uid('note'), productId: id, stage: n, at: nowIso(), byRole: s.role, byName: s.me?.name || null, text } : null;
+        const entry = { at: nowIso(), who: s.role, as: role, outcome, comment, ...(note ? { noteId: note.id } : {}) };
+        const log2 = [...(rec.log || []), entry];
+        let y;
         if (outcome === 'Returned') {
-          return { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...rec, status: 'returned', returnNote: comment, log, approvals: { ...rec.approvals, [role]: { outcome, comment, at: nowIso() } } } } };
+          y = { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...rec, status: 'returned', returnNote: comment, log: log2, approvals: { ...rec.approvals, [role]: { outcome, comment, at: nowIso() } } } } };
+        } else {
+          const approvals = { ...rec.approvals, [role]: { outcome, comment, at: nowIso() } };
+          const withApproval = { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...rec, approvals, log: log2 } } };
+          const done = need.every((r) => approvals[r] && approvals[r].outcome !== 'Returned');
+          y = done ? advanceFrom(withApproval, n, outcome === 'Approved with conditions' ? comment : '') : withApproval;
         }
-        const approvals = { ...rec.approvals, [role]: { outcome, comment, at: nowIso() } };
-        const withApproval = { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...rec, approvals, log } } };
-        const done = need.every((r) => approvals[r] && approvals[r].outcome !== 'Returned');
-        return done ? advanceFrom(withApproval, n, outcome === 'Approved with conditions' ? comment : '') : withApproval;
-      }, `Stage ${outcome === 'Returned' ? 'returned' : 'approved'}`, `Stage ${n}${comment ? `: ${comment}` : ''}`)),
-      override: (id, n, reason) => CAN.override(state.role) && updateSystem(id, (x) => advanceFrom({
-        ...x, stages: { ...x.stages, [n]: { ...(x.stages[n] || newStage()), log: [...(x.stages[n]?.log || []), { at: nowIso(), who: 'lead', outcome: 'Overridden', comment: reason }], approvals: { ...(x.stages[n]?.approvals || {}), lead: { outcome: 'Approved with conditions', comment: `Override: ${reason}`, at: nowIso() } } } },
-      }, n, `Override: ${reason}`), 'Gate overridden', `Stage ${n}: ${reason}`),
+        const next = { ...s, systems: s.systems.map((z) => (z.id === id ? y : z)), notes: note ? [...(s.notes || []), note] : s.notes };
+        return log(next, `Stage ${outcome === 'Returned' ? 'returned' : 'approved'}`, id, `Stage ${n}${comment ? `: ${comment}` : ''}`);
+      }),
+      override: (id, n, reason) => CAN.override(state.role) && updateSystem(id, (x) => {
+        if (x.stage !== n || ['Retired', 'Blocked', 'Draft'].includes(x.status) || x.stages?.[n]?.status === 'approved') return x;
+        return advanceFrom({
+          ...x, stages: { ...x.stages, [n]: { ...(x.stages[n] || newStage()), log: [...(x.stages[n]?.log || []), { at: nowIso(), who: 'lead', outcome: 'Overridden', comment: reason }], approvals: { ...(x.stages[n]?.approvals || {}), lead: { outcome: 'Approved with conditions', comment: `Override: ${reason}`, at: nowIso() } } } },
+        }, n, `Override: ${reason}`);
+      }, 'Gate overridden', `Stage ${n}: ${reason}`),
       startEvent: (id, kind, text) => CAN.raiseEvent(state.role) && updateSystem(id, (x) => {
         const to = { change: 8, incident: 9, retire: 10 }[kind];
+        if (!to || x.stage !== 7 || x.status !== 'In production') return x;
         return { ...x, stage: to, stages: { ...x.stages, [to]: newStage() }, events: [...(x.events || []), { at: nowIso(), kind, text }] };
       }, { change: 'Change raised', incident: 'Incident reported', retire: 'Retirement started' }[kind], text),
 
@@ -362,12 +403,12 @@ export function StoreProvider({ children }) {
   if (mode === 'cloud') {
     if (auth.recovery) return <AuthScreen mode="recovery" onDone={() => setAuth((a) => ({ ...a, recovery: false }))} />;
     if (auth.phase === 'signedout') return <AuthScreen />;
-    if (auth.phase === 'pending') return <PendingScreen profile={auth.profile} onSignOut={() => cloud.auth.signOut()} />;
+    if (auth.phase === 'pending') return <PendingScreen profile={auth.profile} onSignOut={() => cloud.auth.signOut()} onCheck={() => recheck.current?.()} />;
   }
   if (boot !== 'ready' || (mode === 'cloud' && auth.phase !== 'in')) {
     return (
       <div className="boot" role="status">
-        <div className="mark">G</div>
+        <div className="mark boot-mark">G</div>
         {boot !== 'error' ? <p>Loading GovernAI…</p> : (
           <>
             <p><b>Couldn't reach the database.</b></p>

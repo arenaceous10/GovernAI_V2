@@ -10,7 +10,8 @@ import Product from './pages/Product.jsx';
 import Catalog from './pages/Catalog.jsx';
 import { ActionsPage, AuditLog, Methodology, ReviewQueue } from './pages/Other.jsx';
 import { AdminBank, AdminClients, AdminSettings } from './pages/Admin.jsx';
-import { NoAccess } from './components/ui.jsx';
+import { NoAccess, Mark } from './components/ui.jsx';
+import { Notifications, QuickSearch, Toaster } from './components/Extras.jsx';
 
 // Hash holds a plain name (e.g. #product--sys-1) so links survive hosts that only allow simple fragments.
 function useHashRoute() {
@@ -80,7 +81,8 @@ export default function App() {
   return (
     <div className="shell">
       <aside className="side">
-        <div className="brand"><div className="mark">G</div><div>GovernAI<small>{role === 'client' ? client?.name : 'Governance team'}</small></div></div>
+        <div className="brand"><div className="mark"><Mark /></div><div>GovernAI<small>{role === 'client' ? client?.name : 'Governance team'}</small></div><Notifications nav={nav} /></div>
+        <QuickSearch nav={nav} pages={items} />
         <nav className="nav" aria-label="Main">
           {items.map(({ to, label, icon: Icon, badge }) => (
             <button key={to} aria-current={current === to ? 'page' : undefined} onClick={() => nav(to)}>
@@ -111,7 +113,8 @@ export default function App() {
           <button className="btn ghost sm" style={{ marginTop: 6 }} onClick={async () => { await signOut(); window.location.hash = ''; }}><LogOut size={14} /> Sign out</button>
         </div>
       </aside>
-      <main className="main">{page}</main>
+      <main className="main" key={go}>{page}</main>
+      <Toaster />
     </div>
   );
 }

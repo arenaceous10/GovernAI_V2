@@ -156,3 +156,20 @@ test('admin questions join the questionnaire, are scored by option position and 
   const r1 = scoreAssessment(p, ['EU_AI_ACT', 'GDPR'], qs, all); const r0 = scoreAssessment(p, ['EU_AI_ACT', 'GDPR'], qs, low);
   assert.ok(r1.principles.privacy.readiness > r0.principles.privacy.readiness, 'strongest option raises privacy readiness');
 });
+
+test('deadline radar applies dates only to products in scope, soonest first', async () => {
+  const { deadlinesFor, deadlineRadar, daysUntil } = await import('../src/data/deadlines.js');
+  const now = Date.parse('2026-11-04T00:00:00Z');
+  const mk = (fws, profile, tier, status = 'Active') => ({ status, assessment: { frameworks: fws, profile: { annex: 'none', transparency: [], ...profile }, results: { tier } } });
+  const chatbot = mk(['EU_AI_ACT'], { transparency: ['chat', 'synthetic'] }, 'limited');
+  const credit = mk(['EU_AI_ACT', 'DPDP'], { annex: 'essential' }, 'high');
+  const gdprOnly = mk(['GDPR'], {}, 'minimal');
+  assert.deepEqual(deadlinesFor(chatbot, now).map((d) => d.id), ['eu-art50', 'eu-marking'].filter((id) => id !== 'eu-art50' || daysUntil('2026-08-02', now) > -30));
+  assert.deepEqual(deadlinesFor(credit, now).map((d) => d.id), ['dpdp-consent', 'dpdp-full', 'eu-annex3']);
+  assert.equal(deadlinesFor(gdprOnly, now).length, 0);
+  assert.equal(deadlinesFor({ ...credit, status: 'Retired' }, now).length, 0, 'retired products have no deadlines');
+  assert.equal(daysUntil('2027-12-02', now), 393);
+  const radar = deadlineRadar([chatbot, credit, gdprOnly], now);
+  assert.ok(radar.every((d, i) => i === 0 || radar[i - 1].days <= d.days), 'sorted');
+  assert.equal(radar.find((d) => d.id === 'eu-annex3').products.length, 1);
+});
