@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { Check, Loader2, Sparkles } from 'lucide-react';
 import {
-  ANNEX_III, DATA_CATEGORIES, DOMAINS, FRAMEWORKS, PROFILE_QUESTIONS, PROHIBITED, PRINCIPLES, PRINCIPLE_IDS,
+  ANNEX_III, DATA_CATEGORIES, DOMAINS, FRAMEWORKS, PROFILE_QUESTIONS, PROHIBITED, PRINCIPLES, PRINCIPLE_IDS, PILLARS,
   SOURCING, SYSTEM_TYPES, TRANSPARENCY, suggestFrameworks, selectionLabel, systemTypeLabel,
 } from '../data/frameworks.js';
 import { COUNTRIES, REGIONS } from '../data/countries.js';
@@ -9,7 +9,7 @@ import {
   emptyProfile, fixedQuestions, adaptiveTarget, selectAdaptive, aiAdaptive, orderQuestions, sectionOf, sectionOrder,
   scoreAssessment, buildActions,
 } from '../engine/engine.js';
-import { Field, Ladder, Multi, Panel } from '../components/ui.jsx';
+import { Field, Ladder, Multi, Panel, Single } from '../components/ui.jsx';
 import Combobox from '../components/Combobox.jsx';
 import { fwName } from '../components/Results.jsx';
 import { useStore } from '../store/store.jsx';
@@ -55,6 +55,20 @@ function initialState(existing) {
 }
 
 const clean = (p) => { const x = { ...p }; delete x.prohibitedChecked; delete x.prohibitedAny; return x; };
+
+function PillarHeading({ index, title, detail, count }) {
+  return (
+    <div className="pillar-head">
+      <span className="pillar-index">{String(index).padStart(2, '0')}</span>
+      <div className="pillar-title">
+        <span className="eyebrow">Pillar {index}</span>
+        <h3>{title}</h3>
+        {detail && <p className="small mute">{detail}</p>}
+      </div>
+      {count && <span className="pillar-count num">{count}</span>}
+    </div>
+  );
+}
 
 export default function NewAssessment({ nav, existing }) {
   const { register, saveDraft, state } = useStore();
@@ -139,6 +153,19 @@ export default function NewAssessment({ nav, existing }) {
 
   const sections = sectionOrder(fws).map((k) => ({ k, qs: questions.filter((q) => sectionOf(q, fws) === k) })).filter((s) => s.qs.length);
   const current = sections.some((s) => s.k === section) ? section : sections[0]?.k;
+  const activeSection = sections.find((s) => s.k === current);
+  const questionGroups = (() => {
+    const groups = new Map();
+    for (const q of activeSection?.qs || []) {
+      const key = current === 'DG' ? `dg:${q.pillar || 'catalog'}` : `rai:${q.principle || 'accountability'}`;
+      if (!groups.has(key)) groups.set(key, { key, qs: [] });
+      groups.get(key).qs.push(q);
+    }
+    const principleOrder = new Map(PRINCIPLE_IDS.map((id, i) => [`rai:${id}`, i]));
+    const pillarOrder = new Map(Object.keys(PILLARS).map((id, i) => [`dg:${id}`, i]));
+    const order = current === 'DG' ? pillarOrder : principleOrder;
+    return [...groups.values()].sort((a, b) => (order.get(a.key) ?? 99) - (order.get(b.key) ?? 99));
+  })();
   const answered = questions.length - unanswered;
   const firstUnanswered = questions.find((q) => answers[q.id] == null);
   const sel = (id, list, val, set, ph = 'Choose…') => (
@@ -243,26 +270,31 @@ export default function NewAssessment({ nav, existing }) {
 
       {step === 2 && (
         <div className="stack">
-          <Panel>
-            <div className="grid g2" style={{ gap: '18px 28px' }}>
-              {PRINCIPLE_IDS.map((pid) => (
-                <div key={pid}>
-                  <div className="small" style={{ fontWeight: 600, color: 'var(--accent-ink)', marginBottom: 8 }}>{PRINCIPLES[pid].name}</div>
-                  <div className="stack" style={{ gap: 10 }}>
-                    {PROFILE_QUESTIONS.filter((q) => q.principle === pid).map((q) => (
-                      <Field key={q.id} label={q.q}>{sel(q.id, q.options.map((o, i) => ({ value: i, label: o.label })), p.answers[q.id], (v) => up({ answers: { ...p.answers, [q.id]: Number(v) } }))}</Field>
-                    ))}
-                  </div>
+          <div className="grid g2 risk-pillars">
+            {PRINCIPLE_IDS.map((pid, index) => (
+              <section className="panel risk-pillar" key={pid}>
+                <PillarHeading index={index + 1} title={PRINCIPLES[pid].name} detail={PRINCIPLES[pid].tagline} count={`${PRINCIPLES[pid].weight}%`} />
+                <div className="stack risk-pillar-questions">
+                  {PROFILE_QUESTIONS.filter((q) => q.principle === pid).map((q) => (
+                    <Field key={q.id} label={q.q}>
+                      <Single
+                        className="choices risk-options"
+                        options={q.options.map((o, i) => ({ value: i, label: o.label }))}
+                        value={p.answers[q.id]}
+                        onChange={(v) => up({ answers: { ...p.answers, [q.id]: Number(v) } })}
+                      />
+                    </Field>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </Panel>
-          <Panel>
+              </section>
+            ))}
+          </div>
+          <Panel title="Regulatory screening" sub="Check prohibited practices and any applicable EU AI Act conditions.">
             <div className="grid g2">
               <Field label="Does it involve a prohibited practice, such as social scoring, manipulation or emotion recognition at work?">
-                {sel('prohibitedAny', [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes' }], p.prohibitedAny, (v) => up({ prohibitedAny: v, prohibitedChecked: true, prohibited: v === 'no' ? [] : p.prohibited }))}
+                <Single className="choices risk-options compact-options" options={[{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes' }]} value={p.prohibitedAny} onChange={(v) => up({ prohibitedAny: v, prohibitedChecked: true, prohibited: v === 'no' ? [] : p.prohibited })} />
               </Field>
-              {eu && <Field label="Is it used in a sensitive area listed in the EU AI Act (Annex III)?">{sel('annex', ANNEX_III.map((a) => ({ value: a.id, label: a.label })), p.annex, (v) => up({ annex: v }))}</Field>}
+              {eu && <Field label="Is it used in a sensitive area listed in the EU AI Act (Annex III)?"><Single className="choices risk-options" options={ANNEX_III.map((a) => ({ value: a.id, label: a.label }))} value={p.annex} onChange={(v) => up({ annex: v })} /></Field>}
             </div>
             {p.prohibitedAny === 'yes' && (
               <div style={{ marginTop: 14 }}>
@@ -271,8 +303,8 @@ export default function NewAssessment({ nav, existing }) {
             )}
             {eu && p.annex !== 'none' && (
               <div className="grid g2" style={{ marginTop: 14 }}>
-                <Field label="Does it only do a narrow or preparatory task, without shaping the decision?">{sel('narrow', [{ value: 'no', label: 'No, it shapes or makes the decision' }, { value: 'yes', label: 'Yes, narrow or preparatory only' }], p.narrowTask, (v) => up({ narrowTask: v }))}</Field>
-                <Field label="Does it profile individuals?">{sel('profiling', [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }], p.profiling, (v) => up({ profiling: v }))}</Field>
+                <Field label="Does it only do a narrow or preparatory task, without shaping the decision?"><Single className="choices risk-options compact-options" options={[{ value: 'no', label: 'No, it shapes or makes the decision' }, { value: 'yes', label: 'Yes, narrow or preparatory only' }]} value={p.narrowTask} onChange={(v) => up({ narrowTask: v })} /></Field>
+                <Field label="Does it profile individuals?"><Single className="choices risk-options compact-options" options={[{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]} value={p.profiling} onChange={(v) => up({ profiling: v })} /></Field>
               </div>
             )}
             {eu && (
@@ -294,23 +326,33 @@ export default function NewAssessment({ nav, existing }) {
                 return <button key={s.k} role="tab" aria-selected={current === s.k} onClick={() => setSection(s.k)}>{fwName(s.k)} <span className="xs mute num">{done}/{s.qs.length}</span></button>;
               })}
             </div>
-            <Panel>
-              {sections.find((s) => s.k === current)?.qs.map((q) => (
-                <div className="q" key={q.id}>
-                  <div className="q-head">
-                    <p className="q-text">{q.q}</p>
-                    {q.kind !== 'core' && <span className="tag accent" title={q.why}>{q.source === 'ai' ? <><Sparkles size={11} /> Tailored</> : 'Tailored'}</span>}
-                  </div>
-                  <Ladder q={q} value={answers[q.id]} onChange={(v) => { setAnswers((a) => ({ ...a, [q.id]: v })); setSaved(''); }} />
-                </div>
-              ))}
+            <div className="question-pillars">
+              {questionGroups.map((group, index) => {
+                const id = group.key.slice(group.key.indexOf(':') + 1);
+                const title = current === 'DG' ? PILLARS[id]?.name || id : PRINCIPLES[id]?.name || id;
+                const done = group.qs.filter((q) => answers[q.id] != null).length;
+                return (
+                  <section className="question-pillar" key={group.key}>
+                    <PillarHeading index={index + 1} title={title} count={`${done}/${group.qs.length}`} />
+                    {group.qs.map((q) => (
+                      <div className="q" key={q.id}>
+                        <div className="q-head">
+                          <p className="q-text">{q.q}</p>
+                          {q.kind !== 'core' && <span className="tag accent" title={q.why}>{q.source === 'ai' ? <><Sparkles size={11} /> Tailored</> : 'Tailored'}</span>}
+                        </div>
+                        <Ladder q={q} value={answers[q.id]} onChange={(v) => { setAnswers((a) => ({ ...a, [q.id]: v })); setSaved(''); }} />
+                      </div>
+                    ))}
+                  </section>
+                );
+              })}
               <div className="spread" style={{ marginTop: 12 }}>
                 <span className="xs mute">{answered} of {questions.length} answered</span>
                 {sections.findIndex((s) => s.k === current) < sections.length - 1 && (
                   <button type="button" className="btn" onClick={() => { setSection(sections[sections.findIndex((s) => s.k === current) + 1].k); window.scrollTo({ top: 0 }); }}>Next section</button>
                 )}
               </div>
-            </Panel>
+            </div>
           </div>
         )
       )}

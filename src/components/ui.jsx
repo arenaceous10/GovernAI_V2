@@ -42,9 +42,9 @@ export function Bar({ value, color = 'var(--accent)' }) {
 
 export const toneColor = (tone) => ({ good: 'var(--good)', ok: 'var(--ok)', warn: 'var(--warn)', bad: 'var(--bad)' }[tone] || 'var(--mute)');
 
-export function Single({ options, value, onChange, name }) {
+export function Single({ options, value, onChange, name, className = 'choices' }) {
   return (
-    <div className="choices" role="radiogroup" aria-label={name}>
+    <div className={className} role="radiogroup" aria-label={name}>
       {options.map((o, i) => {
         const v = o.value ?? i;
         return (
@@ -81,7 +81,7 @@ export function Ladder({ q, value, onChange }) {
       <div className="ladder" role="radiogroup" aria-label={q.q}>
         {q.options.map((label, i) => (
           <button type="button" key={i} className="choice" role="radio" aria-checked={value === i} onClick={() => onChange(i)} title={LEVEL_NAMES[i]}>
-            <span className="lvl" aria-hidden>{[0, 1, 2, 3].map((k) => <i key={k} className={k <= i ? 'on' : ''} />)}</span>
+            <span className="dot" aria-hidden />
             <span>{label}</span>
           </button>
         ))}
