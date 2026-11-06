@@ -186,9 +186,6 @@ textarea.input { min-height: 92px; resize: vertical; }
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 18px; overflow-x: auto; }
 .tabs button { all: unset; padding: 9px 14px; font-size: 0.92rem; color: var(--mute); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
 .tabs button[aria-selected='true'] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
-.main .tabs { border-bottom-color: rgba(255, 255, 255, 0.28); }
-.main .tabs button, .main .tabs button[aria-selected='true'] { color: #FFFFFF; }
-.main .tabs button[aria-selected='true'] { border-bottom-color: #69D5AE; }
 
 .callout { border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--surface); padding: 12px 14px; border-radius: var(--r-sm); font-size: 0.9rem; }
 .callout.warn { border-left-color: var(--warn); background: #FFFCF6; }
@@ -216,7 +213,7 @@ textarea.input { min-height: 92px; resize: vertical; }
 .sample .mute { color: #A9B1C3; }
 .sample .scale.compact .scale-track { height: 12px; }
 .scale.compact .scale-marker { top: -4px; bottom: -4px; }
-.scale-legend { color: #A9B1C3; }
+.sample .scale-legend { color: #A9B1C3; }
 .sample .scale-marker::before { background: #fff; }
 .sample .scale-marker span { color: #fff; }
 .sample .scale-marker.ghost span { color: #A9B1C3; }
@@ -607,7 +604,9 @@ textarea.input.internal { background: #FFFCF3; border-color: #EAD9AE; min-height
 .signoff:first-of-type { border-top: 0; }
 .so-dot { width: 20px; height: 20px; border-radius: 50%; border: 2px dashed #C5CCD8; display: grid; place-items: center; color: #fff; flex: none; }
 .so-dot.good { background: var(--good); border: 0; } .so-dot.warn { background: var(--warn); border: 0; }
-.gate { align-items: flex-start; background: #F3F9F5; }
+.gate { align-items: flex-start; background: #E9F6EE; border-color: #BFE0CB; border-left: 4px solid var(--good); color: var(--ink-2); }
+.gate b { color: #1F6A3E; }
+.gate .small, .gate .mute { color: var(--ink-2); }
 .gate svg { color: var(--good); flex: none; margin-top: 1px; }
 .activity { list-style: none; margin: 0; padding: 0; position: relative; }
 .activity::before { content: ''; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 2px; background: var(--line-2); }
@@ -957,3 +956,7 @@ kbd { font: 600 0.68rem 'DM Sans', sans-serif; padding: 2px 6px; border-radius: 
 .confirm-box { border: 1px solid #F0C9C2; background: #FFF7F5; border-radius: 12px; padding: 14px 16px; display: grid; gap: 6px; }
 .confirm-box b { color: var(--bad); }
 .confirm-box p { color: var(--ink-2); }
+
+/* readable tabs: dark text, selected tab tinted so the current section is obvious */
+.tabs button { color: var(--ink-2); }
+.tabs button[aria-selected='true'] { color: var(--accent-ink); background: var(--accent-soft); font-weight: 600; }
