@@ -8,7 +8,7 @@ export const productRow = (s) => ({
   id: s.id, client_id: s.clientId || null, code: s.code || null, name: s.name || null, status: s.status || null,
   stage: s.stage || 1, data: s, updated_at: s.updatedAt || s.createdAt || new Date().toISOString(),
 });
-export const clientRow = (c) => ({ id: c.id, name: c.name, sector: c.sector || null, contact: c.contact || null });
+export const clientRow = (c) => ({ id: c.id, name: c.name, sector: c.sector || null, contact: c.contact || null, brand: c.brand || null });
 export const userRow = (u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, client_id: u.clientId || null });
 export const auditRow = (e) => ({ at: e.at, actor: e.actor || null, actor_name: e.actorName || null, org: e.org || null, action: e.action, target: e.target || null, detail: e.detail || null });
 export const auditFromRow = (r) => ({ at: r.at, actor: r.actor, actorName: r.actor_name || undefined, org: r.org || undefined, action: r.action, target: r.target, detail: r.detail || '' });
@@ -18,7 +18,7 @@ export const profileFromRow = (r) => ({
   id: r.id, name: r.name, email: r.email, role: r.role, side: r.side, status: r.status, requestedRole: r.requested_role || null,
   company: r.company || '', createdAt: r.created_at, ...(r.client_id ? { clientId: r.client_id } : {}),
 });
-export const clientFromRow = (r) => ({ id: r.id, name: r.name, sector: r.sector || '', contact: r.contact || '' });
+export const clientFromRow = (r) => ({ id: r.id, name: r.name, sector: r.sector || '', contact: r.contact || '', ...(r.brand ? { brand: r.brand } : {}), ...(r.created_at ? { createdAt: r.created_at } : {}) });
 export const userFromRow = (r) => ({ id: r.id, name: r.name, email: r.email, role: r.role, ...(r.client_id ? { clientId: r.client_id } : {}) });
 
 // What changed between the last saved state and the current one. Identity comparison: updates replace only the objects they change.

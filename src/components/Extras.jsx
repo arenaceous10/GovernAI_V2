@@ -5,7 +5,8 @@ import { STAGES } from '../data/lifecycle.js';
 import { FRAMEWORKS } from '../data/frameworks.js';
 import { deadlineRadar, deadlinesFor, urgency } from '../data/deadlines.js';
 import { fmtDate, TierBadge } from './ui.jsx';
-import { useStore } from '../store/store.jsx';
+import { useStore, waitingOn } from '../store/store.jsx';
+import { reviewTimers, DEFAULT_SLA } from '../engine/ops.js';
 
 // ---------- toasts ----------
 export const toast = (text, tone = 'good') => window.dispatchEvent(new CustomEvent('gov-toast', { detail: { text, tone, id: Math.random() } }));
@@ -50,14 +51,23 @@ export function useNotifications() {
     if (role === 'admin') {
       for (const u of state.users || []) if (u.status === 'pending') out.push({ at: u.createdAt || '', person: u, outcome: 'Waiting for approval' });
     }
+    // Reviews past the service level, for the people who can act on them. Shown as unread until decided.
+    if (role === 'assessor' || role === 'lead' || role === 'admin') {
+      const sla = Number(state.settings?.reviewSlaDays) || DEFAULT_SLA;
+      for (const t of reviewTimers(systems, { sla, waitingOn })) {
+        if (t.state === 'over' && (role === 'admin' || t.waiting.includes(role) || (role === 'lead' && t.waiting.includes('assessor')))) {
+          out.push({ at: t.at, s: t.s, n: t.n, outcome: 'Overdue', comment: `${t.days} working days waiting, target ${sla}`, sticky: true });
+        }
+      }
+    }
     return out.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 30);
-  }, [systems, role, state.users]);
-  const unread = items.filter((i) => i.person ? true : String(i.at) > seen).length;
+  }, [systems, role, state.users, state.settings]);
+  const unread = items.filter((i) => (i.person || i.sticky ? true : String(i.at) > seen)).length;
   const markRead = () => { const now = new Date().toISOString(); try { localStorage.setItem(seenKey(me, role), now); } catch { /* ignore */ } setSeen(now); };
   return { items, unread, seen, markRead };
 }
 
-const ICON = { Submitted: Hourglass, Returned: CornerDownLeft, Overridden: ShieldAlert };
+const ICON = { Submitted: Hourglass, Returned: CornerDownLeft, Overridden: ShieldAlert, Overdue: CalendarClock };
 export function Notifications({ nav }) {
   const { items, unread, seen, markRead } = useNotifications();
   const [open, setOpen] = useState(false);
@@ -81,13 +91,13 @@ export function Notifications({ nav }) {
             <ul>
               {items.map((i, k) => {
                 const Icon = ICON[i.outcome] || CheckCircle2;
-                const fresh = i.person || String(i.at) > seen;
+                const fresh = i.person || i.sticky || String(i.at) > seen;
                 return (
                   <li key={k}>
                     <button type="button" className={fresh ? 'fresh' : ''} onClick={() => { setOpen(false); nav(i.person ? '/admin' : `/product/${i.s.id}`); }}>
-                      <span className={`ni ni-${i.outcome === 'Returned' ? 'warn' : i.outcome === 'Submitted' || i.person ? 'info' : 'good'}`}><Icon size={14} /></span>
+                      <span className={`ni ni-${i.outcome === 'Overdue' ? 'bad' : i.outcome === 'Returned' ? 'warn' : i.outcome === 'Submitted' || i.person ? 'info' : 'good'}`}><Icon size={14} /></span>
                       <span className="nt">
-                        <span>{i.person ? <><b>{i.person.name}</b> is waiting for approval</> : <><b>{i.s.name}</b>: stage {i.n} {i.outcome.toLowerCase()}</>}</span>
+                        <span>{i.person ? <><b>{i.person.name}</b> is waiting for approval</> : <><b>{i.s.name}</b>: stage {i.n} {i.outcome === 'Overdue' ? 'review overdue' : i.outcome.toLowerCase()}</>}</span>
                         {i.comment && <span className="xs mute nc">{i.comment}</span>}
                         <span className="xs mute">{i.person ? i.person.email : `${STAGES[i.n - 1]?.short} · ${fmtDate(i.at)}`}</span>
                       </span>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { LogOut, BookOpen, BookMarked, ClipboardCheck, Database, FilePlus2, History, LayoutDashboard, Library, ListChecks, Settings, Boxes, Users } from 'lucide-react';
+import { LogOut, BookOpen, BookMarked, ClipboardCheck, Database, FilePlus2, History, LayoutDashboard, Library, ListChecks, Settings, Boxes, Users, Activity } from 'lucide-react';
 import { ROLES } from './data/lifecycle.js';
 import { useStore, waitingOn } from './store/store.jsx';
 import Landing from './pages/Landing.jsx';
@@ -13,6 +13,8 @@ import { ActionsPage, AuditLog, Methodology, ReviewQueue } from './pages/Other.j
 import { AdminBank, AdminClients, AdminSettings } from './pages/Admin.jsx';
 import { NoAccess, Mark } from './components/ui.jsx';
 import { Notifications, QuickSearch, Toaster } from './components/Extras.jsx';
+import { VerifyPage } from './components/Proof.jsx';
+import Ops from './pages/Ops.jsx';
 
 // Hash holds a plain name (e.g. #product--sys-1) so links survive hosts that only allow simple fragments.
 function useHashRoute() {
@@ -37,14 +39,15 @@ const NEW = { to: '/new', label: 'Register a product', icon: FilePlus2 };
 const ACTIONS = { to: '/actions', label: 'Actions', icon: ListChecks };
 const METHOD = { to: '/method', label: 'How it works', icon: BookOpen };
 const CARDS = { to: '/cards', label: 'AI cards', icon: BookMarked };
+const OPS = { to: '/ops', label: 'Operations', icon: Activity };
 const NAV = {
   client: [DASH, PRODUCTS, CARDS, NEW, ACTIONS, METHOD],
-  assessor: [DASH, { to: '/queue', label: 'Review queue', icon: ClipboardCheck, badge: true }, PRODUCTS, CARDS, { to: '/catalog', label: 'Data catalog', icon: Database }, ACTIONS, METHOD],
-  admin: [DASH, PRODUCTS, CARDS, { to: '/admin', label: 'Clients and users', icon: Users }, { to: '/bank', label: 'Question bank', icon: Library }, { to: '/settings', label: 'Settings', icon: Settings }, { to: '/audit', label: 'Audit log', icon: History }, METHOD],
+  assessor: [DASH, { to: '/queue', label: 'Review queue', icon: ClipboardCheck, badge: true }, OPS, PRODUCTS, CARDS, { to: '/catalog', label: 'Data catalog', icon: Database }, ACTIONS, METHOD],
+  admin: [DASH, OPS, PRODUCTS, CARDS, { to: '/admin', label: 'Clients and users', icon: Users }, { to: '/bank', label: 'Question bank', icon: Library }, { to: '/settings', label: 'Settings', icon: Settings }, { to: '/audit', label: 'Audit log', icon: History }, METHOD],
 };
 NAV.lead = NAV.assessor;
 // Pages reached by link, per role.
-const EXTRA = { client: ['product', 'draft', 'reassess', 'card'], assessor: ['product', 'card'], lead: ['product', 'card'], admin: ['product', 'card'] };
+const EXTRA = { client: ['product', 'draft', 'reassess', 'card', 'verify'], assessor: ['product', 'card', 'verify'], lead: ['product', 'card', 'verify'], admin: ['product', 'card', 'verify'] };
 
 export default function App() {
   const { role, setRole, state, systems, client, sync, me, signOut } = useStore();
@@ -78,6 +81,8 @@ export default function App() {
   else if (go === '/bank') page = <AdminBank />;
   else if (go === '/settings') page = <AdminSettings />;
   else if (go === '/audit') page = <AuditLog />;
+  else if (go === '/ops') page = <Ops nav={nav} />;
+  else if (go === '/verify') page = <VerifyPage onBack={() => window.history.back()} />;
   else page = <Dashboard nav={nav} />;
 
   const current = go === '/product' || go === '/draft' || go === '/reassess' ? '/products' : go === '/card' ? '/cards' : go;
@@ -86,6 +91,11 @@ export default function App() {
     <div className="shell">
       <aside className="side">
         <div className="brand"><div className="mark"><Mark /></div><div>GovernAI<small>{role === 'client' ? client?.name : 'Governance team'}</small></div><Notifications nav={nav} /></div>
+        {role === 'client' && client?.brand && (
+          <div className="client-brand" style={{ borderLeftColor: client.brand.color || undefined }}>
+            {client.brand.logo ? <img src={client.brand.logo} alt={`${client.name} logo`} /> : <span style={{ color: client.brand.color }}>{client.name}</span>}
+          </div>
+        )}
         <QuickSearch nav={nav} pages={items} />
         <nav className="nav" aria-label="Main">
           {items.map(({ to, label, icon: Icon, badge }) => (

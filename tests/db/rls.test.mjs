@@ -24,9 +24,10 @@ const U = { a: '00000000-0000-0000-0000-00000000000a', b: '00000000-0000-0000-00
 async function setup() {
   const db = new PGlite();
   await db.exec(PRELUDE);
-  for (const f of ['001_governai_v2.sql', '002_evidence_files.sql', '003_auth_rbac.sql', '004_ai_usage.sql', '005_security_fixes.sql']) await db.exec(MIG(f));
+  for (const f of ['001_governai_v2.sql', '002_evidence_files.sql', '003_auth_rbac.sql', '004_ai_usage.sql', '005_security_fixes.sql', '006_function_privileges.sql', '007_ledger_and_ops.sql']) await db.exec(MIG(f));
   await db.exec(`grant select, insert, update, delete on all tables in schema public to anon, authenticated;
-    revoke insert, update, delete on public.v2_ai_usage from anon, authenticated;`);
+    revoke insert, update, delete on public.v2_ai_usage from anon, authenticated;
+    revoke insert, update, delete on public.v2_ledger from anon, authenticated;`);
   const signup = (id, email, meta) => db.query('insert into auth.users (id, email, raw_user_meta_data) values ($1, $2, $3)', [id, email, meta]);
   await signup(U.a, 'a@a.test', { side: 'client', company: 'Org A', name: 'Ann A' });
   await signup(U.b, 'b@b.test', { side: 'client', company: 'Org B', name: 'Bob B' });
@@ -175,4 +176,89 @@ test('a product row cannot pose as another organisation\'s product', async () =>
     [orgA, product('victim', orgB)]), /does not match/);
   // nor can anyone, team included, make data and record disagree
   await fails(as(db, U.rev, `update public.v2_products set data = jsonb_set(data, '{clientId}', to_jsonb($1::text)) where id = 'victim'`, [orgA]), /does not match/);
+});
+
+// ---------- tamper-evident record (migration 007) ----------
+import { verifyChain, compareWithProduct, entries } from '../../src/lib/ledger.js';
+const ledger = async (db, id, uid) => (uid ? await as(db, uid, 'select * from public.v2_ledger where chain = $1 order by seq', [id])
+  : await db.query('select * from public.v2_ledger where chain = $1 order by seq', [id])).rows;
+
+test('the database keeps a hash-chained record of each product that the browser can verify', async () => {
+  const { db, orgA } = await setup();
+  const p = product('pl', orgA, { evidenceNote: 1 });
+  await upsert(db, U.a, p);
+  const submitted = { ...p, status: 'Active', stages: { 1: stage({ status: 'submitted', checklist: { 'Owner named': true, 'Draft only': false },
+    evidence: { 'Owner named': { name: 'owner.pdf', size: 120, data: 'data:application/pdf;base64,AAAA' } },
+    log: [{ at: '2026-11-06T10:00:00Z', who: 'client', outcome: 'Submitted', comment: 'ready' }] }) } };
+  await upsert(db, U.a, submitted);
+  const approved = { ...submitted, stage: 2, stages: { 1: { ...submitted.stages[1], status: 'approved', approvals: { assessor: { outcome: 'Approved', comment: 'ok', at: 'x' } },
+    log: [...submitted.stages[1].log, { at: '2026-11-06T11:00:00Z', who: 'assessor', as: 'assessor', outcome: 'Approved', comment: 'ok' }] }, 2: stage() } };
+  await upsert(db, U.rev, approved);
+  await as(db, U.rev, `insert into public.v2_audit (at, actor, actor_name, action, target, detail) values (now(), 'assessor', 'Rita Reviewer', 'Stage approved', 'pl', 'Stage 1: ok')`);
+
+  const rows = await ledger(db, 'pl', U.a);
+  const kinds = entries(rows).map((e) => e.kind);
+  assert.deepEqual(kinds, ['registered', 'status', 'decision', 'stage', 'decision', 'audit']);
+  const sub = entries(rows)[2];
+  assert.equal(sub.actor, 'client'); assert.equal(sub.data.entry.outcome, 'Submitted');
+  assert.deepEqual(sub.data.submitted.checklist, { 'Owner named': true }, 'only ticked checks are fingerprinted');
+  assert.equal(sub.data.submitted.evidence['Owner named'].name, 'owner.pdf');
+  assert.equal(sub.data.submitted.evidence['Owner named'].data, undefined, 'file contents stay out of the record');
+  assert.equal(entries(rows)[4].actor, 'assessor');
+  assert.equal(entries(rows)[5].data.by, 'Rita Reviewer');
+  const v = await verifyChain(rows);
+  assert.ok(v.ok, JSON.stringify(v.problems)); assert.equal(v.count, 6);
+  assert.ok(compareWithProduct(rows, await read(db, 'pl')).ok);
+});
+
+test('nobody can write the record through the API, and each client sees only its own', async () => {
+  const { db, orgA, orgB } = await setup();
+  await upsert(db, U.a, product('pa', orgA)); await upsert(db, U.b, product('pb', orgB));
+  for (const u of [U.a, U.rev, U.lead]) {
+    await fails(as(db, u, `insert into public.v2_ledger (chain, seq, kind, body, prev, hash) values ('pa', 9, 'x', '{}', '', '')`), /permission denied/);
+    await fails(as(db, u, `update public.v2_ledger set body = '{}' where chain = 'pa'`), /permission denied/);
+    await fails(as(db, u, `delete from public.v2_ledger where chain = 'pa'`), /permission denied/);
+    await fails(as(db, u, `select public.gov_ledger_append('pa', null, 'x', '{}')`), /permission denied/);
+  }
+  assert.deepEqual((await as(db, U.a, 'select distinct chain from public.v2_ledger')).rows.map((r) => r.chain), ['pa']);
+  assert.equal((await as(db, U.rev, 'select count(distinct chain)::int as n from public.v2_ledger')).rows[0].n, 2);
+});
+
+test('edits show: a rewritten log entry is recorded, and direct changes to the record break the chain', async () => {
+  const { db, orgA } = await setup();
+  const p = product('pt', orgA);
+  await upsert(db, U.a, p);
+  const sub = { ...p, status: 'Active', stages: { 1: stage({ status: 'submitted', log: [{ at: '2026-11-06T10:00:00Z', who: 'client', outcome: 'Submitted', comment: 'v1' }] }) } };
+  await upsert(db, U.a, sub);
+  // the team rewrites the client's comment in the product JSON
+  await upsert(db, U.lead, { ...sub, stages: { 1: { ...sub.stages[1], log: [{ ...sub.stages[1].log[0], comment: 'edited' }] } } });
+  let rows = await ledger(db, 'pt');
+  const last2 = entries(rows).slice(-2).map((e) => e.kind);
+  assert.deepEqual(last2, ['decision', 'decision-removed']);
+  assert.equal(entries(rows).at(-1).actor, 'lead', 'the record says who edited it');
+  assert.ok((await verifyChain(rows)).ok);
+  const cmp = compareWithProduct(rows, await read(db, 'pt'));
+  assert.ok(cmp.ok); assert.equal(cmp.removed.length, 1);
+
+  // someone with database access edits the record itself
+  await db.exec(`update public.v2_ledger set body = replace(body, 'v1', 'v0') where chain = 'pt' and seq = 3`);
+  rows = await ledger(db, 'pt');
+  let v = await verifyChain(rows);
+  assert.equal(v.ok, false); assert.equal(v.problems[0].seq, 3);
+  // ... or recomputes that hash too: the next entry no longer links
+  await db.exec(`update public.v2_ledger set hash = encode(sha256(convert_to(prev || E'\\n' || body, 'UTF8')), 'hex') where chain = 'pt' and seq = 3`);
+  v = await verifyChain(await ledger(db, 'pt'));
+  assert.equal(v.ok, false); assert.match(v.problems[0].what, /link/);
+  // ... or deletes an entry
+  await db.exec(`delete from public.v2_ledger where chain = 'pt' and seq = 2`);
+  v = await verifyChain(await ledger(db, 'pt'));
+  assert.equal(v.ok, false); assert.match(v.problems[0].what, /missing/);
+});
+
+test('deleting a product is recorded and its record is kept', async () => {
+  const { db, orgA } = await setup();
+  await upsert(db, U.a, product('pd', orgA));
+  await as(db, U.a, `delete from public.v2_products where id = 'pd'`);
+  const rows = await ledger(db, 'pd', U.a);
+  assert.deepEqual(entries(rows).map((e) => e.kind), ['registered', 'deleted']);
 });

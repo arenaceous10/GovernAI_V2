@@ -70,7 +70,7 @@ export default function Landing() {
           <div className="preview-status"><span />Ready for governance review</div>
         </div>
 
-        <div className="landing-footnote"><LockKeyhole size={14} />Private demo workspace</div>
+        <div className="landing-footnote"><LockKeyhole size={14} />Private demo workspace · <a href="#verify">Check an evidence pack</a></div>
       </div>
     </div>
   );

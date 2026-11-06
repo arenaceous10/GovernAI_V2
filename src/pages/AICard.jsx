@@ -12,6 +12,7 @@ import { Field, Panel, Pill, TierBadge, fmtDate } from '../components/ui.jsx';
 import { fwName } from '../components/Results.jsx';
 import { toast } from '../components/Extras.jsx';
 import { useStore, CAN } from '../store/store.jsx';
+import RegistryPanel from '../components/Registry.jsx';
 
 import { CARD_FIELDS, cardCompleteness, cardStatus } from '../data/card.js';
 export { CARD_FIELDS, cardCompleteness, cardStatus };
@@ -162,6 +163,8 @@ export default function AICardPage({ id, nav }) {
             ) : <p className="small mute">No metrics recorded yet.</p>}
           </Panel>
 
+          <RegistryPanel s={s} />
+
           <Panel title="Responsible AI profile" sub="From the latest assessment">
             <div className="bars">
               {PRINCIPLE_IDS.map((k) => {
@@ -198,7 +201,7 @@ export default function AICardPage({ id, nav }) {
               {edit ? (
                 <>{CARD_FIELDS.filter((x) => !x.rows).map((x) => <Field key={x.k} label={x.label} hint={x.hint}><input className="input" value={d[x.k] || ''} onChange={(e) => setD({ ...d, [x.k]: e.target.value })} /></Field>)}</>
               ) : (
-                <><Attr label="Model or service">{c.modelName}</Attr><Attr label="Version in production">{c.modelVersion}</Attr></>
+                <><Attr label="Model or service">{c.modelName}</Attr><Attr label="Version in production">{c.modelVersion || (s.connector?.latest ? `${s.connector.latest} (latest in the registry)` : '')}</Attr></>
               )}
               <Attr label="Countries">{p.geos.map(geoName).join(', ')}</Attr>
               <Attr label="Frameworks">{a.frameworks.map(fwName).join(', ')}</Attr>

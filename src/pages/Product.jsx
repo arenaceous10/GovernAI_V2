@@ -10,6 +10,7 @@ import { sectionOf, sectionOrder } from '../engine/engine.js';
 import { controlFor, itemState, isMandatory, validReason, controlStatus, SKIP_REASONS, MIN_REASON, COMPASS, COMPASS_IDS } from '../data/controls.js';
 import { downloadReport } from '../engine/report.js';
 import { downloadDeck } from '../engine/deck.js';
+import { annexIV, dpdpPack, downloadPack } from '../engine/docpack.js';
 import { Panel, Pill, Tabs, TierBadge, fmtDate, StatusPill, Field } from '../components/ui.jsx';
 import { LifecycleRail, Ring } from '../components/Stages.jsx';
 import { toast, ProductDeadlines } from '../components/Extras.jsx';
@@ -17,6 +18,7 @@ import Results, { fwName } from '../components/Results.jsx';
 import DataAssets, { catalogCoverage } from '../components/DataAssets.jsx';
 import LineageGraph from '../components/LineageGraph.jsx';
 import { useStore, stageBlockers, waitingOn, newStage, CAN } from '../store/store.jsx';
+import { RecordTab } from '../components/Proof.jsx';
 
 const label = (list, id) => list.find((x) => x.id === id)?.label || id || '—';
 
@@ -579,6 +581,16 @@ function ReportMenu({ s, audit, client }) {
     catch (e) { toast(`Could not build the deck: ${e.message}`, 'warn'); }
     finally { setBusy(false); setOpen(false); }
   };
+  const [sdf, setSdf] = useState(false);
+  const doc = async (kind) => {
+    setBusy(true);
+    try {
+      const d = kind === 'annex' ? annexIV(s, { client }) : dpdpPack(s, { client, significant: sdf });
+      await downloadPack(d, `${kind === 'annex' ? 'annex-iv' : 'dpdp'}-${(s.code || s.id).replace(/[^A-Za-z0-9-]/g, '')}.docx`);
+      toast(`${kind === 'annex' ? 'Annex IV draft' : 'DPDP pack'} downloaded: ${d.coverage.filled} of ${d.coverage.total} items filled`);
+    } catch (e) { toast(`Could not build the document: ${e.message}`, 'warn'); }
+    finally { setBusy(false); setOpen(false); }
+  };
   return (
     <div className="menu-wrap">
       <button className="btn" aria-expanded={open} onClick={() => setOpen(!open)}><Download size={15} /> Report <ChevronDown size={14} /></button>
@@ -590,6 +602,13 @@ function ReportMenu({ s, audit, client }) {
           <button role="menuitem" className="menu-item" onClick={() => { downloadReport(s, audit, client); setOpen(false); }}>
             <FileText size={16} /><span><b>Full audit report</b><span className="xs mute">HTML: every answer, approval and log entry</span></span>
           </button>
+          <button role="menuitem" className="menu-item" disabled={busy} onClick={() => doc('annex')}>
+            <FileText size={16} /><span><b>Annex IV technical documentation</b><span className="xs mute">Word draft, EU AI Act, gaps marked</span></span>
+          </button>
+          <button role="menuitem" className="menu-item" disabled={busy} onClick={() => doc('dpdp')}>
+            <FileText size={16} /><span><b>DPDP pack</b><span className="xs mute">Word draft: processing record and privacy notice</span></span>
+          </button>
+          <label className="menu-check xs"><input type="checkbox" checked={sdf} onChange={(e) => setSdf(e.target.checked)} /> Include the Significant Data Fiduciary part (impact assessment, audit)</label>
         </div>
       )}
     </div>
@@ -630,7 +649,7 @@ export default function Product({ id, nav, back }) {
           <ReportMenu s={s} audit={state.audit.filter((x) => x.target === s.id)} client={client} />
         </div>
       </section>
-      <Tabs value={tab} onChange={setTab} tabs={[['lifecycle', 'Lifecycle'], ['overview', 'Risk and score'], ['assessment', 'Assessment'], ['data', 'Data and lineage'], ['actions', `Actions (${open})`], ['history', 'History']]} />
+      <Tabs value={tab} onChange={setTab} tabs={[['lifecycle', 'Lifecycle'], ['overview', 'Risk and score'], ['assessment', 'Assessment'], ['data', 'Data and lineage'], ['actions', `Actions (${open})`], ['history', 'History'], ['record', 'Record']]} />
       <div key={tab} className="fade-in">
         {tab === 'overview' && <Results results={r} frameworks={s.assessment.frameworks} />}
         {tab === 'lifecycle' && <Lifecycle s={s} />}
@@ -638,6 +657,7 @@ export default function Product({ id, nav, back }) {
         {tab === 'data' && <DataTab s={s} />}
         {tab === 'actions' && <Actions s={s} />}
         {tab === 'history' && <History s={s} />}
+        {tab === 'record' && <RecordTab s={s} />}
       </div>
     </div>
   );

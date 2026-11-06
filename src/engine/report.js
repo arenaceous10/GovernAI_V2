@@ -19,7 +19,7 @@ export function reportHtml(s, audit, client) {
 h1{margin:0 0 4px}h2{margin-top:28px;border-bottom:1px solid #DDE2E8;padding-bottom:4px;font-size:18px}
 table{border-collapse:collapse;width:100%;font-size:13px}td,th{border-bottom:1px solid #EBEEF2;padding:6px 8px;text-align:left;vertical-align:top}th{color:#5A6478;font-weight:500}
 .tier{display:inline-block;padding:3px 12px;border-radius:20px;font-weight:600;color:${E(t.color)};background:${E(t.bg)}}.mute{color:#5A6478}</style></head><body>
-<p class="mute">AI system assessment report, generated ${new Date().toLocaleString('en-GB')}</p>
+${/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(client?.brand?.logo || '') ? `<img src="${client.brand.logo}" alt="" style="max-height:42px;max-width:180px;float:right">` : ''}<p class="mute">AI system assessment report, generated ${new Date().toLocaleString('en-GB')}</p>
 <h1>${E(s.code)}: ${E(s.name)}</h1>
 <p><span class="tier">${E(t.label)} risk</span> &nbsp; Inherent score ${N(r.inherent)}/100, after controls ${N(r.residual)}/100. Control readiness ${N(r.readiness)}%.</p>
 <p><b>Client:</b> ${E(client?.name || '')} &nbsp; <b>Business unit:</b> ${E(s.bu)} &nbsp; <b>Owner:</b> ${E(s.owner)} &nbsp; <b>Stage:</b> ${N(s.stage)}. ${E(STAGES[s.stage - 1]?.name)} &nbsp; <b>Status:</b> ${E(s.status)} &nbsp; <b>Next review:</b> ${E(s.nextReview || 'not set')}</p>

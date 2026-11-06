@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { Palette, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { FRAMEWORKS, SELECTABLE_FRAMEWORKS, PRINCIPLES, TIER_CUTOFFS } from '../data/frameworks.js';
 import { QUESTIONS, LEVEL_NAMES } from '../data/questionBank.js';
 import { ROLES, STAGES } from '../data/lifecycle.js';
@@ -13,6 +13,38 @@ const emailOk = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 
 const STATUS_TONE = { active: 'good', pending: 'warn', disabled: 'bad' };
 const STATUS_NAME = { active: 'Active', pending: 'Waiting for approval', disabled: 'Turned off' };
+
+// Logo and accent colour for one client: shown in its portal and on the documents it downloads.
+function BrandEditor({ c, onDone }) {
+  const { setClientBrand } = useStore();
+  const [b, setB] = useState({ color: c.brand?.color || '#1e3a8a', logo: c.brand?.logo || '' });
+  const [err, setErr] = useState('');
+  const pick = (file) => {
+    setErr('');
+    if (!file) return;
+    if (!['image/png', 'image/jpeg'].includes(file.type)) { setErr('Use a PNG or JPEG file.'); return; }
+    if (file.size > 200 * 1024) { setErr('The logo must be under 200 KB.'); return; }
+    const r = new FileReader(); r.onload = () => setB((x) => ({ ...x, logo: String(r.result) })); r.readAsDataURL(file);
+  };
+  const save = (next) => { const e = setClientBrand(c.id, next); setErr(e); if (!e) { toast(`Branding saved for ${c.name}`); onDone(); } };
+  return (
+    <div className="confirm-box fade-in brand-editor">
+      <b>Branding for {c.name}</b>
+      <p className="small mute">Shown in this client's portal and on the Word documents downloaded for its products.</p>
+      <div className="row" style={{ gap: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <Field label="Logo (PNG or JPEG, under 200 KB)"><input type="file" accept="image/png,image/jpeg" aria-label="Logo file" onChange={(e) => pick(e.target.files?.[0])} /></Field>
+        <Field label="Accent colour"><input type="color" aria-label="Accent colour" value={b.color} onChange={(e) => setB({ ...b, color: e.target.value })} /></Field>
+        <div className="brand-preview" style={{ borderColor: b.color }}>{b.logo ? <img src={b.logo} alt="Logo preview" /> : <span className="xs mute">No logo</span>}<span className="small" style={{ color: b.color, fontWeight: 600 }}>{c.name}</span></div>
+      </div>
+      {err && <div className="xs tone-bad" role="alert" style={{ marginTop: 6 }}>{err}</div>}
+      <div className="row" style={{ marginTop: 10, gap: 8 }}>
+        <button className="btn primary sm" onClick={() => save(b)}>Save branding</button>
+        {c.brand && <button className="btn ghost sm" onClick={() => save({})}>Remove branding</button>}
+        <button className="btn ghost sm" onClick={onDone}>Cancel</button>
+      </div>
+    </div>
+  );
+}
 
 // Signed-in mode: people create their own accounts; the administrator approves them and sets role and organisation.
 function PersonRow({ u, clients, users = [], meId, onSave }) {
@@ -116,14 +148,16 @@ function ClientRow({ c }) {
   return (
     <>
       <tr>
-        <td><b style={{ fontWeight: 500 }}>{c.name}</b></td><td className="small">{c.sector}</td><td className="small">{c.contact}</td><td className="num">{live}</td>
+        <td><span className="row" style={{ gap: 8, flexWrap: 'nowrap' }}>{c.brand?.logo ? <img className="client-logo-sm" src={c.brand.logo} alt="" /> : c.brand?.color ? <i className="brand-dot" style={{ background: c.brand.color }} aria-hidden /> : null}<b style={{ fontWeight: 500 }}>{c.name}</b></span></td><td className="small">{c.sector}</td><td className="small">{c.contact}</td><td className="num">{live}</td>
         <td>
           <div className="row" style={{ gap: 4, flexWrap: 'nowrap', justifyContent: 'flex-end' }}>
+            <button className="btn ghost sm" aria-label={`Branding for ${c.name}`} onClick={() => setMode(mode === 'brand' ? 'view' : 'brand')}><Palette size={14} /></button>
             <button className="btn ghost sm" aria-label={`Edit ${c.name}`} onClick={() => { setMode('edit'); setErr(''); }}><Pencil size={14} /></button>
             <button className="btn ghost sm" aria-label={`Delete ${c.name}`} onClick={() => { setMode(mode === 'delete' ? 'view' : 'delete'); setTyped(''); setErr(''); }}><Trash2 size={14} /></button>
           </div>
         </td>
       </tr>
+      {mode === 'brand' && <tr className="row-confirm"><td colSpan={5}><BrandEditor c={c} onDone={() => setMode('view')} /></td></tr>}
       {mode === 'delete' && (
         <tr className="row-confirm">
           <td colSpan={5}>
@@ -413,6 +447,13 @@ export function AdminSettings() {
             </label>
             <p className="small mute" style={{ marginTop: 8 }}>The AI writes only within the frameworks the client chose; anything citing another law is dropped. If the AI is off or unreachable, the rules engine picks from {QUESTIONS.filter((q) => q.kind === 'adaptive').length} pool questions. Scores always come from the option position.</p>
             <p className="small mute" style={{ marginTop: 8 }}><b>What the AI receives:</b> the type of AI, domain, sourcing, countries, data categories, risk flags, the chosen frameworks and the description with names, emails, phone numbers, ID numbers, account numbers, addresses and links removed. It never receives the product name, owner, business unit, organisation, people, datasets, evidence or answers.</p>
+          </Panel>
+          <Panel title="Review target" sub="Working days from a submission to the governance team's decision. Reviews past it show as overdue in Operations and in reviewers' notifications.">
+            <label className="row" style={{ gap: 8 }}>
+              <input className="input" type="number" min={1} max={30} style={{ width: 90 }} aria-label="Review target in working days" value={state.settings.reviewSlaDays || 5}
+                onChange={(e) => { const v = Math.max(1, Math.min(30, parseInt(e.target.value, 10) || 5)); setSetting('reviewSlaDays', v); }} />
+              <span className="small">working days</span>
+            </label>
           </Panel>
           <CutoffEditor />
           <Panel title="Demo data" sub="Data is stored in this browser only.">

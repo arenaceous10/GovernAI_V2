@@ -1062,3 +1062,40 @@ button.tag { cursor: pointer; border: 0; }
 h1, h2, h3 { text-wrap: balance; }
 .stage-meta { margin: 2px 0 0; font-size: 0.85rem; color: var(--mute); }
 .tier .dot, .pill .dot { display: none; }
+
+/* ---------- tamper-evident record, evidence packs, registry, operations, branding ---------- */
+.verdict { display: flex; flex-wrap: nowrap; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: var(--r-md); border: 1px solid var(--line); margin-bottom: 10px; background: var(--surface); }
+.verdict b { display: block; font-weight: 600; }
+.verdict > div { flex: 1; min-width: 0; }
+.verdict > svg { flex: none; margin-top: 1px; }
+.verdict.ok { border-color: #B7DEC4; background: var(--good-bg); } .verdict.ok svg { color: var(--good-ink); flex: none; }
+.verdict.bad { border-color: #F1C4BE; background: var(--bad-bg); } .verdict.bad svg { color: var(--bad); flex: none; }
+.verdict.warn { border-color: #EED9AE; background: var(--warn-bg); } .verdict.warn svg { color: var(--warn-ink); flex: none; }
+.verdict .small { color: var(--ink-2); margin-top: 2px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; }
+.bad-text { color: var(--bad); }
+.ledger-list { list-style: none; margin: 0; padding: 0; max-height: 560px; overflow: auto; }
+.ledger-list li { display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: start; padding: 8px 0; border-top: 1px solid var(--line-2); }
+.ledger-list li:first-child { border-top: 0; }
+.ledger-list .mono { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
+.verify-page { max-width: 820px; }
+.verify-page.standalone { margin: 40px auto; padding: 0 20px; }
+.verify-page h1 { margin-bottom: 6px; }
+.dropzone { position: relative; display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 18px; padding: 28px; border: 2px dashed var(--line); border-radius: var(--r-md); background: var(--surface); cursor: pointer; color: var(--ink-2); }
+.dropzone.over, .dropzone:hover { border-color: var(--accent); background: var(--accent-soft); }
+.dropzone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.dropzone:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.menu-check { display: flex; gap: 8px; align-items: flex-start; padding: 8px 12px 10px; color: var(--ink-2); border-top: 1px solid var(--line-2); max-width: 320px; }
+.sla-meter { display: inline-block; width: 54px; height: 6px; border-radius: 3px; background: var(--line-2); vertical-align: middle; margin-right: 6px; overflow: hidden; }
+.sla-meter i { display: block; height: 100%; }
+.sla-meter .sla-ok { background: var(--good); } .sla-meter .sla-soon { background: var(--warn); } .sla-meter .sla-over { background: var(--bad); }
+.ni-bad { background: var(--bad-bg); color: var(--bad); }
+.client-logo-sm { height: 22px; max-width: 72px; object-fit: contain; }
+.brand-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.client-brand { margin: 0 14px 10px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--surface); border-radius: 6px; font-weight: 600; font-size: 0.9rem; }
+.client-brand img { display: block; max-height: 34px; max-width: 100%; object-fit: contain; }
+.brand-editor input[type="color"] { width: 52px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
+.brand-preview { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-left: 4px solid; background: var(--surface); border-radius: 6px; min-height: 44px; }
+.brand-preview img { max-height: 32px; max-width: 120px; object-fit: contain; }
+.record .kv { margin-top: 8px; }
+.landing-footnote a { color: inherit; text-decoration: underline; }

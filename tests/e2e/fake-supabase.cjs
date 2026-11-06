@@ -3,11 +3,11 @@
 // supabase/migrations/003_auth_rbac.sql, so tests see what each role would really get back.
 const HOST = 'https://fake.supabase.co';
 const PASSWORD = 'Passw0rd!';
-const KEYS = { v2_products: 'id', v2_clients: 'id', v2_users: 'id', v2_settings: 'key', v2_audit: 'id', v2_profiles: 'id', v2_notes: 'id' };
+const KEYS = { v2_products: 'id', v2_clients: 'id', v2_users: 'id', v2_settings: 'key', v2_audit: 'id', v2_profiles: 'id', v2_notes: 'id', v2_ledger: 'hash' };
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*', 'access-control-expose-headers': '*' };
 
 const newDb = () => ({
-  tables: { v2_products: [], v2_clients: [], v2_users: [], v2_audit: [], v2_settings: [], v2_profiles: [], v2_notes: [] },
+  tables: { v2_products: [], v2_clients: [], v2_users: [], v2_audit: [], v2_settings: [], v2_profiles: [], v2_notes: [], v2_ledger: [] },
   accounts: [], tokens: {}, autoConfirm: true, fail: null, failStorage: false, nextId: 1, calls: [], files: {}, denied: [],
 });
 
@@ -62,11 +62,38 @@ async function seedData(db) {
   const s = buildSeed();
   db.tables.v2_clients.push(...s.clients.map(sync.clientRow));
   db.tables.v2_products.push(...s.systems.map(sync.productRow));
+  for (const r of db.tables.v2_products) ledgerProduct(db, null, r, 'system');
   db.tables.v2_notes.push(...s.notes.map(sync.noteRow));
   db.tables.v2_audit.push(...[...s.audit].reverse().map((e) => ({ id: db.nextId++, ...sync.auditRow(e) })));
   db.tables.v2_settings.push({ key: 'settings', value: { aiQuestions: true, enabledFrameworks: ['EU_AI_ACT', 'GDPR', 'DPDP'], cutoffs: {} } }, { key: 'bankOverrides', value: {} });
 }
 async function seededDb() { const db = newDb(); await seedData(db); addPeople(db); return db; }
+
+// ---------- tamper-evident record (mirror of the triggers in 007_ledger_and_ops.sql) ----------
+const crypto = require('node:crypto');
+function ledgerAppend(db, chain, clientId, kind, data, actor) {
+  const mine = db.tables.v2_ledger.filter((r) => r.chain === chain);
+  const last = mine[mine.length - 1];
+  const seq = (last?.seq || 0) + 1; const prev = last?.hash || '0'.repeat(64); const at = new Date().toISOString();
+  const body = JSON.stringify({ chain, seq, at, kind, actor: actor || 'system', data });
+  db.tables.v2_ledger.push({ chain, seq, client_id: clientId, at, kind, actor: actor || 'system', body, prev, hash: crypto.createHash('sha256').update(`${prev}\n${body}`).digest('hex') });
+}
+function ledgerProduct(db, before, after, actor) {
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  if (!after) { ledgerAppend(db, before.id, before.client_id, 'deleted', { name: before.data?.name, code: before.data?.code, status: before.data?.status, stage: before.data?.stage }, actor); return; }
+  const d = after.data || {}; const o = before?.data;
+  if (!before) ledgerAppend(db, after.id, after.client_id, 'registered', { name: d.name, code: d.code, status: d.status, stage: d.stage }, actor);
+  else {
+    if (o.status !== d.status) ledgerAppend(db, after.id, after.client_id, 'status', { from: o.status, to: d.status }, actor);
+    if (o.stage !== d.stage) ledgerAppend(db, after.id, after.client_id, 'stage', { from: o.stage, to: d.stage }, actor);
+  }
+  const keys = [...new Set([...Object.keys(d.stages || {}), ...Object.keys(o?.stages || {})])].sort((a, b) => a - b);
+  for (const k of keys) {
+    const nl = d.stages?.[k]?.log || []; const ol = o?.stages?.[k]?.log || [];
+    for (const e of nl) if (!ol.some((x) => same(x, e))) ledgerAppend(db, after.id, after.client_id, 'decision', { stage: k, entry: e }, actor);
+    for (const e of ol) if (!nl.some((x) => same(x, e))) ledgerAppend(db, after.id, after.client_id, 'decision-removed', { stage: k, entry: e }, actor);
+  }
+}
 
 // ---------- row-level security (mirror of 003_auth_rbac.sql) ----------
 function who(db, req) {
@@ -84,6 +111,7 @@ const canRead = (u, t, r) => {
     case 'v2_profiles': return r.id === u.id || u.role === 'admin';
     case 'v2_notes': return u.team;
     case 'v2_audit': return u.team || (u.client && r.org === u.client);
+    case 'v2_ledger': return u.team || (u.client && r.client_id === u.client);
     case 'v2_settings': return true;
     default: return u.role === 'admin';
   }
@@ -97,6 +125,7 @@ const canWrite = (u, t, r, existing, method) => {
       return (u.team || (u.client && existing.client_id === u.client)) && (u.team || r.client_id === u.client);
     case 'v2_notes': return method === 'DELETE' ? u.role === 'admin' : ['assessor', 'lead', 'admin'].includes(u.role);
     case 'v2_audit': return method === 'DELETE' ? u.role === 'admin' : (!r.org || r.org === u.client || u.team);
+    case 'v2_ledger': return false;   // written only by the database
     default: return u.role === 'admin';   // clients, profiles, settings, users
   }
 };
@@ -214,7 +243,7 @@ function installRest(context, db) {
     if (method === 'GET' || (method === 'HEAD')) {
       let out = rows.filter((r) => canRead(u, table, r)).filter((r) => matches(r, params));
       const order = url.searchParams.get('order');
-      if (order) { const [col, dir] = order.split('.'); out = [...out].sort((a, b) => String(a[col]).localeCompare(String(b[col])) * (dir === 'desc' ? -1 : 1)); }
+      if (order) { const [col, dir] = order.split('.'); out = [...out].sort((a, b) => (typeof a[col] === 'number' && typeof b[col] === 'number' ? a[col] - b[col] : String(a[col]).localeCompare(String(b[col]))) * (dir === 'desc' ? -1 : 1)); }
       const limit = url.searchParams.get('limit'); if (limit) out = out.slice(0, Number(limit));
       const single = /vnd\.pgrst\.object/.test(req.headers().accept || '');
       if (single) return out.length ? json(route, 200, out[0]) : json(route, 406, { code: 'PGRST116', message: 'no rows' });
@@ -233,8 +262,11 @@ function installRest(context, db) {
         if (!canWrite(u, table, r, existing, method)) return deny(r[key]);
       }
       for (const r of list) {
+        const before = table === 'v2_products' ? rows.find((x) => x[key] === r[key]) : null;
         if (upsert) { const i = rows.findIndex((x) => x[key] === r[key]); if (i >= 0) rows[i] = { ...rows[i], ...r }; else rows.push({ ...r }); }
         else rows.push({ id: table === 'v2_audit' ? db.nextId++ : r.id, ...r });
+        if (table === 'v2_products') ledgerProduct(db, before ? JSON.parse(JSON.stringify(before)) : null, rows.find((x) => x[key] === r[key]), u.role);
+        if (table === 'v2_audit') { const p = db.tables.v2_products.find((x) => x.id === r.target); if (p) ledgerAppend(db, p.id, p.client_id, 'audit', { action: r.action, detail: r.detail, by: r.actor_name, role: r.actor, at: r.at }, u.role); }
       }
       return route.fulfill({ status: 201, headers: CORS, body: '' });
     }
@@ -249,16 +281,53 @@ function installRest(context, db) {
       const hit = rows.filter((r) => canRead(u, table, r) && matches(r, params));
       const allowed = hit.filter((r) => canWrite(u, table, r, r, method));   // like Postgres: rows the policy rejects are silently kept
       db.tables[table] = rows.filter((r) => !allowed.includes(r));
+      if (table === 'v2_products') for (const r of allowed) ledgerProduct(db, r, null, u.role);
       return route.fulfill({ status: 204, headers: CORS, body: '' });
     }
     return route.fulfill({ status: 405, headers: CORS, body: '' });
   });
 }
 
+// The app's own server functions (/api/evidence, /api/connector), run against this fake database.
+// db.registry = { versions: [...] } is what the fake model registry returns.
+function installApi(context, db) {
+  const send = (route, status, body) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  const ctx = async (route) => {
+    const req = route.request(); const u = who(db, req);
+    let body = {}; try { body = JSON.parse(req.postData() || '{}'); } catch { /* empty */ }
+    const row = db.tables.v2_products.find((r) => r.id === body.productId && canRead(u, 'v2_products', r));
+    return { req, u, body, row };
+  };
+  const evidence = context.route('**/api/evidence', async (route) => {
+    const { u, row } = await ctx(route);
+    if (!u.role) return send(route, 401, { error: 'Sign in first' });
+    if (!row) return send(route, 404, { error: 'Unknown product' });
+    const { loadKey, buildPack } = await import('../../src/lib/server/evidence.js');
+    const key = loadKey(require('./test-evidence-key.cjs').priv);
+    const rows = db.tables.v2_ledger.filter((r) => r.chain === row.id).sort((a, b) => a.seq - b.seq);
+    const client = db.tables.v2_clients.find((c) => c.id === row.client_id);
+    const prof = db.tables.v2_profiles.find((p) => p.id === u.id);
+    return send(route, 200, await buildPack({ row, rows, client, issuedTo: { name: prof?.name, role: u.role }, key }));
+  });
+  const connector = context.route('**/api/connector', async (route) => {
+    const { u, body, row } = await ctx(route);
+    db.calls.push(`API connector ${body.action}`);
+    if (!u.role) return send(route, 401, { error: 'Sign in first' });
+    if (!row) return send(route, 404, { error: 'Unknown product' });
+    if (['seal', 'test'].includes(body.action) && !['client', 'admin'].includes(u.role)) return send(route, 403, { error: 'Only the client or an administrator can connect a model' });
+    if (body.action === 'seal') return send(route, 200, { sealed: `v1.sealed-for-${row.id}` });
+    if (body.action === 'test' && !/^https:\/\//.test(body.host || '')) return send(route, 502, { error: 'Only https addresses are allowed' });
+    const versions = (db.registry?.versions || []).slice().sort((a, b) => +b.version - +a.version);
+    return send(route, 200, { model: body.model || row.data?.connector?.model, versions, latest: versions[0]?.version || null });
+  });
+  return Promise.all([evidence, connector]);
+}
+
 async function install(context, db) {
   await installAuth(context, db);
   await installStorage(context, db);
   await installRest(context, db);
+  await installApi(context, db);
 }
 
 // Sign in through the real sign-in form.

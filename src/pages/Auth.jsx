@@ -28,6 +28,7 @@ function Shell({ children }) {
       <div className="landing-l">
         <div className="brand" style={{ padding: 0 }}><div className="mark"><Mark /></div><div>GovernAI</div></div>
         <div className="auth-card fade-in">{children}</div>
+        <p className="small mute" style={{ marginTop: 14 }}>Received an evidence pack? <a href="#verify">Check it here</a>, no account needed.</p>
       </div>
       <div className="landing-r">
         <ParticleField density={0.00012} />

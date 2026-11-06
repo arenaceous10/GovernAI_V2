@@ -100,7 +100,7 @@ function advanceFrom(x, n, conditions = '') {
   return out;
 }
 
-export function StoreProvider({ children }) {
+export function StoreProvider({ children, standalone = null }) {
   const [mode] = useState(cloud ? 'cloud' : 'local');
   const [boot, setBoot] = useState(cloud ? 'loading' : 'ready');
   const [bootError, setBootError] = useState('');
@@ -440,6 +440,33 @@ export function StoreProvider({ children }) {
         return { ...x, updatedAt: nowIso(), card: { ...prev, ...clean, version, updatedAt: nowIso(), updatedBy: state.role,
           versions: [...(prev.versions || []), { version, at: nowIso(), by: state.role, byName: state.me?.name || null, changed }].slice(-30) } };
       }, 'AI card updated', (s2) => `Version ${((s2.systems.find((y) => y.id === id)?.card?.version) || 0) + 1}`),
+      // ----- model registry connection (MLflow or Databricks Unity Catalog) -----
+      // The token is sealed by the server before it is stored here; the browser never keeps it in the clear.
+      connectModel: (id, c) => ['client', 'admin'].includes(state.role) && updateSystem(id, (x) => ({
+        ...x, connector: { kind: c.kind, host: c.host, model: c.model, tokenSealed: c.tokenSealed || '', connectedAt: nowIso(), connectedBy: state.me?.name || state.role,
+          versions: c.result?.versions || [], latest: c.result?.latest || null, seenVersion: c.result?.latest || null, lastSync: c.result ? nowIso() : null, alerts: [] },
+      }), 'Model registry connected', `${c.kind === 'databricks-uc' ? 'Databricks Unity Catalog' : 'MLflow'}: ${c.model}`),
+      disconnectModel: (id) => ['client', 'admin'].includes(state.role) && updateSystem(id, (x) => (x.connector ? { ...x, connector: undefined } : x), 'Model registry disconnected'),
+      // A registry read. A version newer than the last one seen is flagged, and a product in production moves to
+      // change review (stage 8) when the person syncing may raise changes; otherwise the alert waits for them.
+      applyModelSync: (id, result) => {
+        const x0 = state.systems.find((y) => y.id === id);
+        if (!x0?.connector || !result) return null;
+        const fresh = result.latest && x0.connector.seenVersion && String(result.latest) !== String(x0.connector.seenVersion)
+          && (+result.latest || 0) >= (+x0.connector.seenVersion || 0);
+        const canRaise = CAN.raiseEvent(state.role) && x0.stage === 7 && x0.status === 'In production';
+        updateSystem(id, (x) => {
+          if (!x.connector) return x;
+          const c = { ...x.connector, versions: (result.versions || []).slice(0, 50), latest: result.latest || null, lastSync: nowIso() };
+          if (!fresh) return { ...x, connector: { ...c, seenVersion: c.seenVersion || result.latest || null } };
+          const alert = { at: nowIso(), version: String(result.latest), from: String(x.connector.seenVersion), raised: canRaise };
+          const y = { ...x, updatedAt: nowIso(), connector: { ...c, seenVersion: String(result.latest), alerts: [...(c.alerts || []), alert].slice(-20) } };
+          if (!canRaise) return y;
+          const text = `New model version ${result.latest} registered in ${c.model} (was ${x.connector.seenVersion}). Review the change before it is used.`;
+          return { ...y, stage: 8, stages: { ...y.stages, 8: newStage() }, events: [...(y.events || []), { at: nowIso(), kind: 'change', text, auto: true }] };
+        }, fresh ? (canRaise ? 'Change raised' : 'New model version found') : null, fresh ? `Version ${result.latest} in ${x0.connector.model}` : undefined);
+        return fresh ? (canRaise ? 'raised' : 'found') : 'same';
+      },
       // New action, by the client or as a requirement from the governance team (e.g. on a control gap).
       addAction: (id, a) => {
         if (!CAN.work(state.role) && !CAN.review(state.role)) return 'Not allowed';
@@ -475,6 +502,15 @@ export function StoreProvider({ children }) {
 
       // ----- admin -----
       addClient: (c) => state.role === 'admin' && setState((s) => log({ ...s, clients: [...s.clients, { ...c, id: uid('cli') }] }, 'Client added', null, c.name)),
+      // Administrator: a client's logo (PNG or JPEG, small) and accent colour, shown in its portal and documents.
+      setClientBrand: (id, brand) => {
+        if (state.role !== 'admin') return 'Not allowed';
+        const color = brand?.color && /^#[0-9a-f]{6}$/i.test(brand.color) ? brand.color.toLowerCase() : '';
+        const logo = brand?.logo || '';
+        if (logo && (!/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(logo) || logo.length > 280000)) return 'Use a PNG or JPEG logo under 200 KB.';
+        setState((s) => log({ ...s, clients: s.clients.map((c) => (c.id === id ? { ...c, brand: color || logo ? { color, logo } : null } : c)) }, 'Client branding updated', null, s.clients.find((c) => c.id === id)?.name));
+        return '';
+      },
       // Administrator: rename or update an organisation. Its products keep their link, so names follow everywhere.
       updateClient: (id, patch) => {
         if (state.role !== 'admin') return 'Not allowed';
@@ -547,6 +583,8 @@ export function StoreProvider({ children }) {
     };
   }, [state, updateSystem, mode, syncError, flush]);
 
+  // Public pages (e.g. checking an evidence pack) need no sign-in; signed-in people get them inside the app.
+  if (standalone && (mode === 'cloud' ? auth.phase !== 'in' && !auth.recovery : !state.role)) return <Ctx.Provider value={null}>{standalone}</Ctx.Provider>;
   if (mode === 'cloud') {
     if (auth.recovery) return <AuthScreen mode="recovery" onDone={() => setAuth((a) => ({ ...a, recovery: false }))} />;
     if (auth.phase === 'signedout') return <AuthScreen />;
