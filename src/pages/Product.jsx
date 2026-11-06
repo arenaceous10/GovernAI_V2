@@ -24,9 +24,17 @@ const label = (list, id) => list.find((x) => x.id === id)?.label || id || '—';
 async function openFile(v, setErr) {
   setErr('');
   const w = window.open('', '_blank');
+  if (w) w.opener = null;
   try {
     let url = await evidenceUrl(v);
-    if (url?.startsWith('data:')) url = URL.createObjectURL(await (await fetch(url)).blob());
+    if (url?.startsWith('data:')) {   // demo mode only (evidenceUrl allows safe types); decode without fetch, which the CSP blocks
+      const [head, body] = url.split(',', 2);
+      const type = head.slice(5).split(';')[0];
+      const bytes = head.includes(';base64') ? Uint8Array.from(atob(body), (c) => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(body));
+      url = URL.createObjectURL(new Blob([bytes], { type }));
+    }
+    const proto = new URL(url, window.location.href).protocol;
+    if (!['https:', 'blob:'].includes(proto) && !(proto === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(new URL(url).hostname))) throw new Error('This link cannot be opened.');
     if (w) w.location.href = url; else window.location.assign(url);
   } catch (e) {
     if (w) w.close();
@@ -261,8 +269,8 @@ function StageView({ s, n }) {
         <section className="panel stage-head">
           <div className="stage-num">{n}</div>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div className="eyebrow">{ph.name} phase{GATE_STAGES.includes(n) ? ' · approval gate' : ''}</div>
             <h2>{st.name}</h2>
+            <p className="stage-meta">{ph.name} phase{GATE_STAGES.includes(n) ? ', approval gate' : ''}</p>
             <p className="mute small" style={{ marginTop: 4, maxWidth: '72ch' }}>{st.objective}</p>
             <button type="button" className="btn ghost sm" style={{ marginTop: 6, paddingLeft: 0 }} aria-expanded={howOpen} onClick={() => setHowOpen(!howOpen)}>
               <ChevronDown size={14} className={`chev ${howOpen ? 'open' : ''}`} /> How to complete this stage
@@ -605,9 +613,8 @@ export default function Product({ id, nav, back }) {
       <button className="btn ghost back" onClick={() => nav(back)}><ArrowLeft size={16} /> Back</button>
       <section className="product-hero">
         <div style={{ minWidth: 0 }}>
-          <div className="eyebrow">{role !== 'client' && client ? `${client.name} · ` : ''}{s.code}</div>
-          <div className="row" style={{ marginTop: 2 }}><h1>{s.name}</h1><TierBadge tier={r.tier} /></div>
-          <p className="mute small" style={{ marginTop: 4 }}>{s.owner ? `Owner ${s.owner}` : ''}{s.bu ? ` · ${s.bu}` : ''}</p>
+          <div className="row"><h1>{s.name}</h1><TierBadge tier={r.tier} /></div>
+          <p className="mute small" style={{ marginTop: 4 }}>{[s.code, role !== 'client' && client ? client.name : '', s.owner ? `Owner ${s.owner}` : '', s.bu].filter(Boolean).join(', ')}</p>
         </div>
         <div className="hero-stage">
           <div className="xs mute">Current stage</div>

@@ -3,7 +3,7 @@ import { TIERS, TIER_ORDER, PRINCIPLE_IDS } from '../data/frameworks.js';
 import { PrincipleRadar } from '../components/Results.jsx';
 import { QUESTIONS } from '../data/questionBank.js';
 import { STAGES, PHASES, phaseOf, ROLES, requiredApprovals } from '../data/lifecycle.js';
-import { Panel, TierBadge, StatusPill, fmtDate, CountUp, ParticleField } from '../components/ui.jsx';
+import { Panel, TierBadge, StatusPill, fmtDate, CountUp } from '../components/ui.jsx';
 import { StageMini, Ring, stageLabel } from '../components/Stages.jsx';
 import { useStore, waitingOn, CAN } from '../store/store.jsx';
 import { DeadlineRadar } from '../components/Extras.jsx';
@@ -119,7 +119,7 @@ function ClientHome({ nav }) {
   const heroSub = work.length + drafts.length ? `${work.length + drafts.length} ${work.length + drafts.length === 1 ? 'product needs' : 'products need'} your action${returned.length ? `, ${returned.length} returned` : ''}.` : mine.length ? 'You are up to date. The governance team has everything it needs.' : 'Register your first AI product to start its lifecycle.';
   return (
     <div className="fade-in">
-      <header className="hero"><ParticleField /><div className="hero-in"><div><div className="eyebrow">{client?.name}</div><h1>Your AI lifecycle</h1><p className="hero-sub">{heroSub}</p></div>
+      <header className="hero"><div className="hero-in"><div><h1>Your AI lifecycle</h1><p className="hero-sub">{heroSub}</p></div>
         <button className="btn primary" onClick={() => nav('/new')}><FilePlus2 size={16} /> Register an AI product</button>
       </div></header>
       <div className="kpis">
@@ -186,7 +186,7 @@ function ReviewerHome({ nav }) {
   const heroSub = mineN.length ? `${mineN.length} ${mineN.length === 1 ? 'stage is' : 'stages are'} waiting for your review, the oldest for ${oldest} ${oldest === 1 ? 'day' : 'days'}.` : 'Nothing is waiting for your review.';
   return (
     <div className="fade-in">
-      <header className="hero"><ParticleField /><div className="hero-in"><div><div className="eyebrow">Governance team</div><h1>Review workspace</h1><p className="hero-sub">{heroSub}</p></div></div></header>
+      <header className="hero"><div className="hero-in"><div><h1>Review workspace</h1><p className="hero-sub">{heroSub}</p></div></div></header>
       <div className="kpis">
         <Kpi icon={ClipboardCheck} value={mineN.length} label="Waiting for your review" tone={mineN.length ? 'accent' : ''} onClick={() => nav('/queue')} />
         <Kpi icon={Clock} value={mineN.length ? `${oldest}d` : '—'} label="Oldest waiting" tone={oldest > 5 ? 'bad' : oldest > 2 ? 'warn' : ''} />
@@ -227,7 +227,7 @@ function LeadHome({ nav }) {
   }]));
   return (
     <div className="fade-in">
-      <header className="hero"><ParticleField /><div className="hero-in"><div><div className="eyebrow">Governance team</div><h1>Portfolio oversight</h1><p className="hero-sub">{heroSub}</p></div></div></header>
+      <header className="hero"><div className="hero-in"><div><h1>Portfolio oversight</h1><p className="hero-sub">{heroSub}</p></div></div></header>
       <div className="kpis">
         <Kpi icon={ShieldAlert} value={gateMine.length} label="Gate decisions for you" tone={gateMine.length ? 'accent' : ''} onClick={() => nav('/queue')} />
         <Kpi icon={ClipboardCheck} value={reviewers.length} label="With reviewers" />
@@ -277,7 +277,7 @@ function AdminHome({ nav }) {
   ];
   return (
     <div className="fade-in">
-      <header className="hero"><ParticleField /><div className="hero-in"><div><div className="eyebrow">Administrator</div><h1>Workspace setup</h1><p className="hero-sub">{heroSub}</p></div></div></header>
+      <header className="hero"><div className="hero-in"><div><h1>Workspace setup</h1><p className="hero-sub">{heroSub}</p></div></div></header>
       <div className="kpis">
         <Kpi icon={Users} value={state.clients.length} label="Clients" onClick={() => nav('/admin')} />
         <Kpi icon={Users} value={state.users.length} label="Users" onClick={() => nav('/admin')} />

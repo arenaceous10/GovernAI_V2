@@ -102,3 +102,26 @@ test('the AI never receives names, contact details, identifiers or secrets', () 
   assert.ok(!/7946/.test(s.description));
   assert.equal(scrubText('Mr. John Smith wrote this'), '[person] wrote this');
 });
+
+test('stored products: the row decides id and organisation; malformed rows are left out', async () => {
+  const { productFromRow } = await import('../src/store/sync.js');
+  const ok = productFromRow({ id: 'p1', client_id: 'cli-a', data: { id: 'victim', clientId: 'cli-b', stage: 3, stages: {}, assessment: null } });
+  assert.equal(ok.id, 'p1'); assert.equal(ok.clientId, 'cli-a');
+  for (const data of [null, [], { stage: 0 }, { stage: 'x' }, { stage: 11 }, { stage: 2, stages: [] }, { stage: 2, actions: 'x' },
+    { stage: 1, assessment: { results: { tier: '<img>' }, questions: [], answers: {}, frameworks: [] } }]) {
+    assert.equal(productFromRow({ id: 'p', client_id: 'c', data }), null, JSON.stringify(data));
+  }
+});
+
+test('the HTML report escapes every stored value', async () => {
+  const { reportHtml } = await import('../src/engine/report.js');
+  const { buildSeed } = await import('../src/store/seed.js');
+  const s = structuredClone(buildSeed().systems[0]);
+  const X = '<img src=x onerror=alert(1)>';
+  s.actions[0].priority = X; s.assessment.frameworks.push(X); s.assessment.results.frameworks[X] = { score: X, status: { label: X }, criticalGaps: [] };
+  s.assessment.results.fixedCount = X; s.assessment.results.inherent = X;
+  const html = reportHtml(s, [], { name: X });
+  assert.ok(!html.includes('<img'), 'no raw tag');
+  assert.ok(html.includes('&lt;img'));
+  assert.ok(html.includes("Content-Security-Policy"));
+});

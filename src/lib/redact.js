@@ -30,8 +30,12 @@ const TITLED = /\b(?:Mr|Mrs|Ms|Miss|Dr|Prof|Shri|Smt|Sri)\.?\s+[A-Z][a-z]+(?:\s+
 
 const escapeRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// Full-width and other compatibility forms fold to plain ASCII, and invisible joiners are dropped, so
+// "ｐｒｉｙａ＠ｅｘａｍｐｌｅ．ｃｏｍ" or "priya\u200b@example.com" cannot slip past the patterns.
+const fold = (t) => String(t || '').normalize('NFKC').replace(/[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g, '');
+
 export function scrubText(text, known = [], max = 700) {
-  let t = String(text || '');
+  let t = fold(text);
   // Contact details, identifiers and secrets first (so an email is removed whole), then known names
   // (longest first, whole words, any case), then titled names such as "Dr. Ravi Kumar".
   for (const [label, re] of PATTERNS) t = t.replace(re, (m, lead) => (label === '[handle]' ? `${lead || ''}${label}` : label));
@@ -68,6 +72,6 @@ export const safeAvoid = (xs) => (Array.isArray(xs) ? xs.slice(0, 120).map((x) =
 
 // Fails closed: true when text still looks like it holds something identifying.
 export function looksSensitive(text) {
-  const t = String(text || '');
+  const t = fold(text);
   return PATTERNS.some(([, re]) => { re.lastIndex = 0; const hit = re.test(t); re.lastIndex = 0; return hit; }) || /\b(?:Mr|Mrs|Ms|Dr)\.?\s+[A-Z][a-z]+/.test(t);
 }

@@ -43,14 +43,13 @@ export default function Landing() {
       <div className="landing-r">
         <ParticleField density={0.00012} />
         <div className="landing-message">
-          <div className="landing-kicker"><span />Governance workspace</div>
           <h2>Make responsible AI a practice, not a promise.</h2>
           <p>Bring evidence, ownership and oversight together in one clear view.</p>
         </div>
 
         <div className="governance-preview" aria-hidden="true">
           <div className="preview-head">
-            <div><span className="preview-eyebrow">REVIEW SNAPSHOT</span><strong>AI product review</strong></div>
+            <div><span className="preview-eyebrow">Review snapshot</span><strong>AI product review</strong></div>
             <span className="preview-shield"><ShieldCheck size={20} /></span>
           </div>
           <div className="preview-product">

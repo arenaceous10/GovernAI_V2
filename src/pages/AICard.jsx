@@ -107,11 +107,10 @@ export default function AICardPage({ id, nav }) {
       <button className="btn ghost back" onClick={() => nav('/cards')}><ArrowLeft size={16} /> AI cards</button>
       <section className="product-hero card-hero">
         <div style={{ minWidth: 0 }}>
-          <div className="eyebrow"><BookMarked size={12} /> AI card · {s.code}{role !== 'client' && client ? ` · ${client.name}` : ''}</div>
-          <div className="row" style={{ marginTop: 2 }}><h1>{s.name}</h1><TierBadge tier={r.tier} /><Pill tone={cs.tone}>{cs.tone === 'good' && <BadgeCheck size={12} />} {cs.label}</Pill></div>
+          <div className="row"><h1>{s.name}</h1><TierBadge tier={r.tier} /><Pill tone={cs.tone}>{cs.tone === 'good' && <BadgeCheck size={12} />} {cs.label}</Pill></div>
           <p className="card-def">{definitionOf(s)}</p>
           <div className="row xs mute" style={{ gap: 14 }}>
-            <span>Version {c.version || 1}</span><span>Updated {fmtDate(c.updatedAt || s.updatedAt)}</span>
+            <span>AI card {s.code}{role !== 'client' && client ? `, ${client.name}` : ''}</span><span>Version {c.version || 1}</span><span>Updated {fmtDate(c.updatedAt || s.updatedAt)}</span>
             {(f('tags') || []).map((t) => <span key={t} className="tag"><Tag size={10} /> {t}</span>)}
           </div>
         </div>

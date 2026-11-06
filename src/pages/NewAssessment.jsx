@@ -62,7 +62,6 @@ function PillarHeading({ index, title, detail, count }) {
     <div className="pillar-head">
       <span className="pillar-index">{String(index).padStart(2, '0')}</span>
       <div className="pillar-title">
-        <span className="eyebrow">Pillar {index}</span>
         <h3>{title}</h3>
         {detail && <p className="small mute">{detail}</p>}
       </div>

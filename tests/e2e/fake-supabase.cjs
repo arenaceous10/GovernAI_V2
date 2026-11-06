@@ -93,7 +93,7 @@ const canWrite = (u, t, r, existing, method) => {
   switch (t) {
     case 'v2_products':
       if (method === 'DELETE') return u.role === 'admin' || (u.client && r.client_id === u.client && r.status === 'Draft');
-      if (!existing) return u.role === 'admin' || (u.client && r.client_id === u.client);
+      if (!existing) return u.team || (u.client && r.client_id === u.client);   // migration 005: team may write
       return (u.team || (u.client && existing.client_id === u.client)) && (u.team || r.client_id === u.client);
     case 'v2_notes': return method === 'DELETE' ? u.role === 'admin' : ['assessor', 'lead', 'admin'].includes(u.role);
     case 'v2_audit': return method === 'DELETE' ? u.role === 'admin' : (!r.org || r.org === u.client || u.team);
@@ -228,6 +228,8 @@ function installRest(context, db) {
       for (const r of list) {
         const existing = upsert ? rows.find((x) => x[key] === r[key]) : null;
         if (existing && !canRead(u, table, existing)) return deny(r[key]);
+        // Like Postgres: INSERT ... ON CONFLICT DO UPDATE checks the proposed row against the INSERT policy too.
+        if (upsert && existing && !canWrite(u, table, r, null, method)) return deny(r[key]);
         if (!canWrite(u, table, r, existing, method)) return deny(r[key]);
       }
       for (const r of list) {

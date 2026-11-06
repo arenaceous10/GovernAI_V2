@@ -3,8 +3,9 @@
 // The model only writes wording; scores come from option position in the app, never from the model.
 // If this endpoint is missing or fails, the app falls back to its rule-based question picker.
 //
-// Privacy: the request body is rebuilt from an allowlist and the description scrubbed again here, so even a
-// modified client cannot send names, contact details, identifiers or secrets to the model. Nothing is logged.
+// Privacy: the request body is rebuilt from an allowlist and the free text scrubbed again here (contact details,
+// identifiers, secrets, titled names, and the caller's own name and organisation). Other personal names are removed
+// in the browser, which knows the workspace's people and organisations. Nothing is logged.
 import { safeUseCase, safeAvoid, looksSensitive } from '../src/lib/redact.js';
 import { guard, MAX_BODY } from '../src/lib/aiGuard.js';
 
@@ -76,7 +77,7 @@ export default async function handler(req, res) {
   if (JSON.stringify(body).length > MAX_BODY) return res.status(413).json({ error: 'Request too large' });
   const count = Math.min(25, Math.max(1, parseInt(body.count, 10) || 8));
   const frameworks = Array.isArray(body.frameworks) ? body.frameworks.filter((f) => FW_NAMES[f]) : [];
-  const useCase = safeUseCase(body.useCase || {});
+  const useCase = safeUseCase(body.useCase || {}, gate.known || []);
   const avoid = safeAvoid(body.avoid);
   if (looksSensitive(useCase.description) || avoid.some(looksSensitive)) return res.status(422).json({ error: 'Refused: the text still looks like it contains personal or secret data' });
   try {

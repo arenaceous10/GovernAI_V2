@@ -32,8 +32,16 @@ export async function uploadEvidence(file, { systemId, stage }) {
   return { ...meta, path };
 }
 
+// Only these inline types may be opened from a demo-mode data: URL; never HTML, SVG or script.
+const SAFE_DATA = /^data:(application\/pdf|image\/(png|jpeg|gif|webp)|text\/plain|text\/csv|application\/vnd\.openxmlformats-officedocument\.[a-z.]+|application\/msword|application\/vnd\.ms-excel)[;,]/i;
+
 export async function evidenceUrl(v) {
-  if (v?.data) return v.data;
+  // With the database connected, files are only ever opened through a short-lived signed link. An inline `data`
+  // value in a stored product is ignored there, because anyone who can edit the product could have put it there.
+  if (v?.data && !cloud) {
+    if (!SAFE_DATA.test(v.data)) throw new Error('This file type cannot be opened here. Download it from the original source.');
+    return v.data;
+  }
   if (!v?.path) return null;
   if (!cloud) throw new Error('This file is stored in the database, which is not connected.');
   const { data, error } = await cloud.storage.from(BUCKET).createSignedUrl(v.path, 600);

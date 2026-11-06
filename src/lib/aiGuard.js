@@ -1,11 +1,11 @@
 // Who may call the AI endpoint, and how often. Runs on the server (api/generate-questions.js).
 // 1. The caller must send a valid Supabase access token (checked with Supabase Auth, not just decoded).
 // 2. Their profile must be active, with a role that can register AI products (client or admin).
-// 3. Rate limit: each call is recorded in v2_ai_usage with the caller's own token (row-level security ties the
-//    row to them, and they cannot delete it). Over the hourly or daily limit, the call is refused.
+// 3. Rate limit: the database function ai_usage_take() checks and records each call in one locked step, per user
+//    (hourly and daily) and for the whole workspace (daily). Users cannot write or delete usage rows themselves.
 // Fails closed: if Supabase is not configured on the server, the endpoint refuses every call.
 
-export const LIMITS = { perHour: 12, perDay: 40 };
+export const LIMITS = { perHour: 12, perDay: 40, globalDay: 600 };   // mirrored in supabase/migrations/005
 export const MAX_BODY = 24 * 1024; // bytes
 
 export async function guard(req, { env = process.env, fetchImpl = fetch, now = Date.now() } = {}) {
@@ -23,19 +23,23 @@ export async function guard(req, { env = process.env, fetchImpl = fetch, now = D
   const user = await u.json();
   if (!user?.id) return { status: 401, error: 'Sign in to use AI questions' };
 
-  const p = await fetchImpl(`${url}/rest/v1/v2_profiles?select=role,status&id=eq.${encodeURIComponent(user.id)}`, { headers: h });
+  const p = await fetchImpl(`${url}/rest/v1/v2_profiles?select=role,status,name,client_id&id=eq.${encodeURIComponent(user.id)}`, { headers: h });
   const prof = p.ok ? (await p.json())?.[0] : null;
   if (!prof || prof.status !== 'active' || !['client', 'admin'].includes(prof.role)) return { status: 403, error: 'Your role cannot generate assessment questions' };
 
-  const since = new Date(now - 86400000).toISOString();
-  const q = await fetchImpl(`${url}/rest/v1/v2_ai_usage?select=at&user_id=eq.${encodeURIComponent(user.id)}&at=gte.${encodeURIComponent(since)}&order=at.desc&limit=${LIMITS.perDay + 1}`, { headers: h });
-  if (!q.ok) return { status: 503, error: 'AI questions are not available right now' };
-  const rows = await q.json();
-  const hour = rows.filter((r) => new Date(r.at).getTime() > now - 3600000).length;
-  if (hour >= LIMITS.perHour || rows.length >= LIMITS.perDay) {
-    return { status: 429, error: `AI question limit reached (${LIMITS.perHour} an hour, ${LIMITS.perDay} a day). The standard question picker is used instead.` };
+  // Check and record in one locked database step (ai_usage_take), so parallel calls cannot slip past the limit.
+  const t = await fetchImpl(`${url}/rest/v1/rpc/ai_usage_take`, { method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: '{}' });
+  if (!t.ok) return { status: 503, error: 'AI questions are not available right now' };
+  const verdict = await t.json();
+  if (verdict === 'forbidden') return { status: 403, error: 'Your role cannot generate assessment questions' };
+  if (verdict === 'global') return { status: 429, error: 'AI questions have reached today\'s limit for this workspace. The standard question picker is used instead.' };
+  if (verdict !== 'ok') return { status: 429, error: `AI question limit reached (${LIMITS.perHour} an hour, ${LIMITS.perDay} a day). The standard question picker is used instead.` };
+
+  // Names the model must never see, known on the server: the caller's own name and organisation.
+  const known = [prof.name, ...String(prof.name || '').split(/\s+/).filter((w) => w.length >= 3), user.email?.split('@')[0]];
+  if (prof.client_id) {
+    const c = await fetchImpl(`${url}/rest/v1/v2_clients?select=name&id=eq.${encodeURIComponent(prof.client_id)}`, { headers: h });
+    if (c.ok) known.push(...((await c.json()) || []).map((r) => r.name));
   }
-  const ins = await fetchImpl(`${url}/rest/v1/v2_ai_usage`, { method: 'POST', headers: { ...h, 'Content-Type': 'application/json', Prefer: 'return=minimal' }, body: '{}' });
-  if (!ins.ok) return { status: 503, error: 'AI questions are not available right now' };
-  return { ok: true, userId: user.id };
+  return { ok: true, userId: user.id, known: known.filter(Boolean) };
 }

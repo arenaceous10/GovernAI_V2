@@ -44,7 +44,7 @@ export function diffState(prev, next, opts = {}) {
 }
 export const isEmptyOps = (o) => Object.values(o).every((v) => v.length === 0);
 
-const ok = async (q) => { const { error } = await q; if (error) throw new Error(error.message || 'Database error'); };
+const ok = async (q) => { const { error } = await q; if (error) throw Object.assign(new Error(error.message || 'Database error'), { code: error.code }); };
 
 // Order matters: audit goes last, so a retry after a partial failure never duplicates audit rows.
 export async function applyOps(db, ops) {
@@ -59,10 +59,27 @@ export async function applyOps(db, ops) {
   if (ops.audit.length) await ok(db.from(T.audit).insert(ops.audit.map(auditRow)));
 }
 
+// A product as stored: the row's own id and organisation win over anything inside `data` (so a row cannot pose as
+// another organisation's product), and rows whose shape the screens cannot draw are left out instead of crashing them.
+const TIER_IDS = ['minimal', 'limited', 'high', 'unacceptable'];
+export function productFromRow(r) {
+  const d = r?.data;
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
+  const stage = Number(d.stage);
+  if (!Number.isInteger(stage) || stage < 1 || stage > 10) return null;
+  if (d.stages && (typeof d.stages !== 'object' || Array.isArray(d.stages))) return null;
+  if (d.assessment) {
+    const res = d.assessment.results;
+    if (!res || !TIER_IDS.includes(res.tier) || !Array.isArray(d.assessment.questions) || typeof d.assessment.answers !== 'object' || !Array.isArray(d.assessment.frameworks)) return null;
+  }
+  for (const k of ['actions', 'datasets', 'outputs', 'events', 'history']) if (d[k] != null && !Array.isArray(d[k])) return null;
+  return { ...d, id: r.id ?? d.id, clientId: r.client_id ?? undefined, actions: d.actions || [], datasets: d.datasets || [], outputs: d.outputs || [] };
+}
+
 export async function loadAll(db) {
   const get = async (q) => { const { data, error } = await q; if (error) throw new Error(error.message || 'Database error'); return data || []; };
   const [products, clients, users, audit, settings, notes] = await Promise.all([
-    get(db.from(T.products).select('data')),
+    get(db.from(T.products).select('id,client_id,data')),
     get(db.from(T.clients).select('*')),
     get(db.from(T.profiles).select('*').order('created_at', { ascending: true })),
     get(db.from(T.audit).select('*').order('at', { ascending: false }).limit(AUDIT_LIMIT)),
@@ -70,7 +87,7 @@ export async function loadAll(db) {
     get(db.from(T.notes).select('*')),
   ]);
   const setting = (k) => settings.find((s) => s.key === k)?.value;
-  const systems = products.map((r) => r.data).filter(Boolean).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const systems = products.map(productFromRow).filter(Boolean).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   return {
     empty: !products.length && !clients.length,
     systems, clients: clients.map(clientFromRow), users: users.map(profileFromRow), audit: audit.map(auditFromRow),

@@ -6,7 +6,9 @@ import { Panel, TierBadge, StatusPill, fmtDate } from '../components/ui.jsx';
 import { StageMini } from '../components/Stages.jsx';
 import { useStore } from '../store/store.jsx';
 
-const csv = (rows) => rows.map((r) => r.map((v) => `"${String(v ?? '').replaceAll('"', '""')}"`).join(',')).join('\n');
+// Cells starting with = + - @ or a tab/return are prefixed with ' so a spreadsheet shows them as text, not a formula.
+const cell = (v) => { const t = String(v ?? ''); return /^[=+\-@\t\r]/.test(t) ? `'${t}` : t; };
+const csv = (rows) => rows.map((r) => r.map((v) => `"${cell(v).replaceAll('"', '""')}"`).join(',')).join('\n');
 
 export default function Products({ nav }) {
   const { state, systems, role, deleteDraft } = useStore();

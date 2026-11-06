@@ -155,14 +155,15 @@ export function StoreProvider({ children }) {
   }, [start]);
 
   // Re-read access for the signed-in user (after a refused save, or "Check again" on the waiting screen).
-  recheck.current = async () => {
+  recheck.current = async (reloadNote = '') => {
     const { data: sess } = await cloud.auth.getSession();
     if (!sess?.session) return;
     const { data } = await cloud.from(T.profiles).select('*').eq('id', sess.session.user.id).maybeSingle();
     const profile = data ? profileFromRow(data) : null;
     const ok = profile && profile.status === 'active' && profile.role && (profile.role !== 'client' || profile.clientId);
     const same = ok && auth.profile && profile.role === auth.profile.role && profile.clientId === auth.profile.clientId && auth.phase === 'in';
-    if (same) return;
+    if (same && !reloadNote) return;
+    if (same) { await start(profile); setSyncError(reloadNote); return; }
     userRef.current = null; savedRef.current = null;
     onSession(sess.session);
   };
@@ -189,6 +190,12 @@ export function StoreProvider({ children }) {
       if (isEmptyOps(ops)) { savedRef.current = target; return; }
       try { await applyOps(cloud, ops); savedRef.current = target; setSyncError(''); }
       catch (e) {
+        // Refused by a lifecycle rule in the database (only the governance team may approve, move stages or go live,
+        // or this copy was older than the server's): load the current version so the screen shows what is true.
+        if (e.code === '42501' && !/row-level security|permission denied/i.test(e.message || '')) {
+          recheck.current?.(`${e.message}. The latest version has been loaded.`);
+          return;
+        }
         setSyncError(e.message || 'Could not save');
         // Refused by the database: access may have been changed or turned off since sign-in.
         if (/row-level security|permission denied|42501|JWT/i.test(e.message || '')) recheck.current?.();
