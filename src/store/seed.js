@@ -27,6 +27,18 @@ const DEMOS = [
       ds('Policy master', 'Policy admin system', 'Inference input', 'Confidential', true, 'Head of Underwriting', 'M. Iyer', true, true, false),
       ds('Repair estimates', 'Garage partner API', 'Inference input', 'Internal', false, 'Supply chain lead', '', false, false, false)],
     outputs: ['Recommendation to a staff member', 'Internal dashboard or report'],
+    card: {
+      summary: 'A classification model that scores each new motor claim and recommends fast-track settlement or referral to an investigator.',
+      intendedUse: 'Claims handlers in the motor claims team use the score at first notification of loss to decide the handling route. The handler makes the final decision.',
+      outOfScope: 'Not for refusing claims, pricing policies, or any decision without a handler. Not for commercial, marine or home claims.',
+      affected: 'Claims handlers (users) and motor policyholders who make a claim (affected, never see the model).',
+      oversight: 'Every recommendation is reviewed by a handler, who can override it with a reason. Overrides are sampled weekly by the claims quality lead.',
+      limitations: 'Trained on 2022 to 2025 UK claims. Lower accuracy on claims with incomplete repair estimates and on vehicles older than 15 years.',
+      ethics: 'Postcode is excluded as a feature to avoid proxy discrimination. Fast-track rates are monitored by age band and region.',
+      modelName: 'Gradient boosted trees (LightGBM)', modelVersion: '1.4.0', modelOwner: 'Claims analytics lead',
+      metrics: [{ name: 'AUC', value: '0.86', at: '2026-09-30' }, { name: 'Fast-track precision', value: '93%', at: '2026-09-30' }, { name: 'Override rate', value: '7.5%', at: '2026-10-31' }],
+      tags: ['claims', 'triage', 'motor', 'fnol'],
+    },
   },
   {
     client: 'northwind', stage: 2, st: 'submitted',
@@ -150,6 +162,7 @@ export function buildSeed() {
     const { fixed, adaptive } = buildQuestionnaire(profile, d.fws);
     const questions = [...fixed, ...adaptive];
     const answers = answerSim(questions, profileFlags(profile), d.bias, profile.name);
+    if (i === 0) { const q = questions.find((x) => x.kind !== 'core' && answers[x.id] !== 'na'); if (q) answers[q.id] = 'unknown'; }   // demo of a "Not known" answer
     const results = scoreAssessment(profile, d.fws, questions, answers);
     const tier = results.tier;
     const created = new Date(today.getTime() - (200 - i * 18) * 86400000);
@@ -161,9 +174,15 @@ export function buildSeed() {
     path.forEach((n, k) => { stages[n] = done(n, at(10 + k * 12), tier); });
     if (stage > 7) stages[7] = { ...done(7, at(90), tier) };
     stages[stage] = current(stage, blocked ? 'open' : d.st, tier, new Date(today.getTime() - (((i * 2) % 7) + 1) * 86400000).toISOString(), d.returnNote);
-    const actions = buildActions(questions, answers, tier, new Date(today.getTime() - (40 - i * 3) * 86400000));
+    const actions = buildActions(questions, answers, tier, new Date(today.getTime() - (40 - i * 3) * 86400000), profile);
     actions.forEach((a, k) => { if (k % 3 === 0 && stage > 3) a.status = 'Done'; else if (k % 4 === 1) a.status = 'In progress'; a.owner = profile.owner; });
     const id = `sys-${i + 1}`;
+    // Demo of an optional check skipped with a reason on the first product's open stage.
+    if (i === 0 && stages[stage]?.status === 'open') {
+      const item = STAGES[stage - 1].checklist.find((x) => !stages[stage].checklist[x] && /Accessibility/.test(x));
+      if (item) stages[stage].skipped = { [item]: { category: 'planned', reason: 'Claims handlers use the desktop tool only; the accessibility audit is booked with the UX team for January.', due: new Date(today.getTime() + 60 * 86400000).toISOString().slice(0, 10), at: at(98), control: 'ACC-01' } };
+      if (item) actions.push({ id: `act-demo-skip`, qid: `check:${stage}:ACC-01`, source: 'checklist', stage, item, control: 'ACC-01', topic: 'Accessibility and inclusive design', action: `Complete: ${item.replace(/\.$/, '')}. Reason given: accessibility audit booked with the UX team.`, principle: 'accountability', refs: `Control ACC-01, stage ${stage}`, priority: 'Medium', due: stages[stage].skipped[item].due, status: 'Open', owner: profile.owner });
+    }
     // internal notes move out of the product into the team-only notes list
     for (const [n, rec] of Object.entries(stages)) {
       (rec.log || []).forEach((e, k) => {
@@ -182,7 +201,7 @@ export function buildSeed() {
       events: d.incident ? [{ at: at(110), kind: 'incident', text: d.incident }] : [],
       assessment: { at: created.toISOString(), by: 'client', profile, frameworks: d.fws, questions, answers, results, questionSource: 'Rule-based tailoring' },
       history: [{ at: created.toISOString(), tier, inherent: results.inherent, residual: results.residual, readiness: results.readiness }],
-      datasets: d.datasets, outputs: d.outputs, actions, draft: null,
+      datasets: d.datasets, outputs: d.outputs, actions, draft: null, ...(d.card ? { card: { ...d.card, version: 1, updatedAt: at(99), versions: [{ version: 1, at: at(99), by: 'client', byName: profile.owner, changed: Object.keys(d.card) }] } } : {}),
     });
     audit.push({ at: created.toISOString(), actor: 'client', org: d.client, action: 'Registered', target: id, detail: `${profile.name}: ${TIERS[tier].label} risk, score ${results.residual}` });
     for (const n of Object.keys(stages)) if (stages[n].status === 'approved') audit.push({ at: stages[n].approvedAt, actor: 'assessor', action: 'Stage approved', target: id, detail: `Stage ${n}` });

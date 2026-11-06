@@ -5,3 +5,4 @@ dist-single
 .env.local
 .vercel
 e2e-shots
+dist-cloud

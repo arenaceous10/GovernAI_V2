@@ -60,7 +60,7 @@ export default function Catalog({ nav }) {
                   {['catalogued', 'lineage', 'qualityChecked'].map((k) => <td key={k}><Pill tone={d[k] ? 'good' : 'bad'}>{d[k] ? 'Yes' : 'No'}</Pill></td>)}
                   <td>
                     {d.users.map((s) => (
-                      <button key={s.id} className="btn ghost sm" style={{ display: 'flex', gap: 6, padding: '2px 0' }} onClick={() => nav(`/system/${s.id}`)}>
+                      <button key={s.id} className="btn ghost sm" style={{ display: 'flex', gap: 6, padding: '2px 0' }} onClick={() => nav(`/product/${s.id}`)}>
                         {s.name} <TierBadge tier={s.assessment.results.tier} />
                       </button>
                     ))}

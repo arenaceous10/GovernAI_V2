@@ -8,6 +8,7 @@ import { AuthScreen, PendingScreen } from '../pages/Auth.jsx';
 import { removeEvidence } from '../lib/files.js';
 import { requiredApprovals, nextStage, stageOf } from '../data/lifecycle.js';
 import { TIERS, SELECTABLE_FRAMEWORKS } from '../data/frameworks.js';
+import { controlFor, controlById, isMandatory, itemState, validReason, SKIP_REASONS } from '../data/controls.js';
 
 const KEY = 'governai.v4';
 const Ctx = createContext(null);
@@ -54,14 +55,24 @@ const workable = (x, n) => n === x.stage && !['Retired', 'Blocked', 'Draft'].inc
 export const newStage = () => ({ status: 'open', checklist: {}, evidence: {}, approvals: {}, note: '' });
 
 // What stops the current stage from being submitted or approved.
-export function stageBlockers(sys) {
+// Mandatory items must be ticked. Other items must be ticked or skipped with a valid reason.
+export function stageBlockers(sys, rules = {}) {
   const st = stageOf(sys.stage);
   const rec = sys.stages?.[sys.stage] || newStage();
   if (sys.status === 'Blocked') return ['Prohibited practice: this product cannot proceed'];
   if (sys.status === 'Retired') return ['Retired'];
-  const missing = st.checklist.filter((i) => !rec.checklist[i]);
-  return missing.length ? [`${missing.length} checklist item${missing.length > 1 ? 's' : ''} still to confirm`] : [];
+  const tier = sys.assessment?.results?.tier;
+  const open = st.checklist.filter((i) => itemState(rec, i) === 'open');
+  const mand = open.filter((i) => isMandatory(i, tier, rules));
+  const opt = open.length - mand.length;
+  const out = [];
+  if (mand.length) out.push(`${mand.length} mandatory check${mand.length > 1 ? 's' : ''} still to tick`);
+  if (opt) out.push(`${opt} optional check${opt > 1 ? 's' : ''} to tick or skip with a reason`);
+  return out;
 }
+
+// Open actions created by skipping a check go away when the check is ticked or un-skipped.
+const dropSkipAction = (actions, n, item) => (actions || []).filter((a) => !(a.source === 'checklist' && a.stage === n && a.item === item && a.status === 'Open'));
 
 export function waitingOn(sys) {
   const rec = sys.stages?.[sys.stage];
@@ -319,12 +330,49 @@ export function StoreProvider({ children }) {
       toggleCheck: (id, n, item) => CAN.work(state.role) && updateSystem(id, (x) => {
         if (!workable(x, n)) return x;
         const rec = x.stages[n] || newStage();
-        return { ...x, stages: { ...x.stages, [n]: { ...rec, checklist: { ...rec.checklist, [item]: !rec.checklist[item] } } } };
+        const skipped = { ...(rec.skipped || {}) }; delete skipped[item];
+        return { ...x, actions: dropSkipAction(x.actions, n, item), stages: { ...x.stages, [n]: { ...rec, skipped, checklist: { ...rec.checklist, [item]: !rec.checklist[item] } } } };
       }),
+      // Skip an optional check with a reason. Reasons that need follow-up become actions linked to the control.
+      skipCheck: (id, n, item, { category, reason, due }) => {
+        if (!CAN.work(state.role)) return 'Only the client can skip checks';
+        const x = state.systems.find((y) => y.id === id);
+        if (!x || !workable(x, n)) return 'This stage cannot be changed now';
+        if (isMandatory(item, x.assessment?.results?.tier, state.settings.checklistRules)) return 'This check is mandatory and cannot be skipped';
+        const why = SKIP_REASONS.find((r) => r.id === category);
+        if (!why) return 'Choose why it is skipped';
+        const bad = validReason(reason); if (bad) return bad;
+        if (why.needsDate && !/^\d{4}-\d{2}-\d{2}$/.test(due || '')) return 'Choose the date it will be done';
+        if (why.needsDate && due < new Date().toISOString().slice(0, 10)) return 'The date must be today or later';
+        const c = controlFor(item);
+        updateSystem(id, (y) => {
+          if (!workable(y, n)) return y;
+          const rec = y.stages[n] || newStage();
+          const checklist = { ...rec.checklist }; delete checklist[item];
+          const act = why.action ? [{
+            id: uid('act'), qid: `check:${n}:${c.id}`, source: 'checklist', stage: n, item, control: c.id, topic: c.name,
+            action: `${why.id === 'planned' ? 'Complete' : 'Review the accepted risk for'}: ${item.replace(/\.$/, '')}. Reason given: ${reason.trim()}`,
+            principle: 'accountability', refs: `Control ${c.id}, stage ${n}`, priority: why.id === 'accepted' ? 'High' : 'Medium',
+            due: due || new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10), status: 'Open', owner: '',
+          }] : [];
+          return {
+            ...y, actions: [...dropSkipAction(y.actions, n, item), ...act],
+            stages: { ...y.stages, [n]: { ...rec, checklist, skipped: { ...(rec.skipped || {}), [item]: { category, reason: reason.trim(), due: due || null, at: nowIso(), control: c.id } } } },
+          };
+        }, 'Check skipped', `Stage ${n}: ${item} (${why.label}: ${reason.trim()})`);
+        return '';
+      },
+      unskipCheck: (id, n, item) => CAN.work(state.role) && updateSystem(id, (x) => {
+        if (!workable(x, n)) return x;
+        const rec = x.stages[n] || newStage();
+        const skipped = { ...(rec.skipped || {}) }; delete skipped[item];
+        return { ...x, actions: dropSkipAction(x.actions, n, item), stages: { ...x.stages, [n]: { ...rec, skipped } } };
+      }),
+      // Ticks every item that is not skipped; skipped items keep their reason.
       checkAll: (id, n, items) => CAN.work(state.role) && updateSystem(id, (x) => {
         if (!workable(x, n)) return x;
         const rec = x.stages[n] || newStage();
-        return { ...x, stages: { ...x.stages, [n]: { ...rec, checklist: Object.fromEntries(items.map((i) => [i, true])) } } };
+        return { ...x, stages: { ...x.stages, [n]: { ...rec, checklist: Object.fromEntries(items.filter((i) => !rec.skipped?.[i]).map((i) => [i, true])) } } };
       }),
       setEvidence: (id, n, item, value) => CAN.work(state.role) && updateSystem(id, (x) => {
         if (!workable(x, n)) return x;
@@ -332,7 +380,7 @@ export function StoreProvider({ children }) {
         return { ...x, stages: { ...x.stages, [n]: { ...rec, evidence: { ...rec.evidence, [item]: value } } } };
       }),
       submitStage: (id, n, note) => CAN.work(state.role) && updateSystem(id, (x) => {
-        if (!workable(x, n) || stageBlockers(x).length) return x;
+        if (!workable(x, n) || stageBlockers(x, state.settings.checklistRules).length) return x;
         return { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...x.stages[n], status: 'submitted', note, submittedAt: nowIso(), approvals: {}, returnNote: '', log: [...(x.stages[n]?.log || []), { at: nowIso(), who: 'client', outcome: 'Submitted', comment: note }] } } };
       }, 'Stage submitted for review', () => `Stage ${n}: ${stageOf(n).name}`),
       // One update for the decision and its internal note, so a repeated click can neither skip a stage nor leave a stray note.
@@ -373,6 +421,46 @@ export function StoreProvider({ children }) {
       }, { change: 'Change raised', incident: 'Incident reported', retire: 'Retirement started' }[kind], text),
 
       // ----- actions and data -----
+      // AI card: the client documents the use case. Each save is a numbered version listing what changed.
+      saveCard: (id, patch) => CAN.work(state.role) && updateSystem(id, (x) => {
+        const prev = x.card || {};
+        const clean = { ...patch }; delete clean.versions; delete clean.version; delete clean.updatedAt; delete clean.updatedBy;
+        clean.metrics = (clean.metrics || []).filter((m) => String(m.name || '').trim()).map((m) => ({ name: String(m.name).trim().slice(0, 60), value: String(m.value || '').trim().slice(0, 40), at: m.at || '' }));
+        clean.tags = [...new Set((clean.tags || []).map((t) => String(t).trim().toLowerCase()).filter(Boolean))].slice(0, 12);
+        const changed = Object.keys(clean).filter((k) => JSON.stringify(clean[k] ?? '') !== JSON.stringify(prev[k] ?? ''));
+        if (!changed.length) return x;
+        const version = (prev.version || 0) + 1;
+        return { ...x, updatedAt: nowIso(), card: { ...prev, ...clean, version, updatedAt: nowIso(), updatedBy: state.role,
+          versions: [...(prev.versions || []), { version, at: nowIso(), by: state.role, byName: state.me?.name || null, changed }].slice(-30) } };
+      }, 'AI card updated', (s2) => `Version ${((s2.systems.find((y) => y.id === id)?.card?.version) || 0) + 1}`),
+      // New action, by the client or as a requirement from the governance team (e.g. on a control gap).
+      addAction: (id, a) => {
+        if (!CAN.work(state.role) && !CAN.review(state.role)) return 'Not allowed';
+        if (String(a.action || '').trim().length < 10) return 'Describe the action in at least 10 characters';
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(a.due || '')) return 'Choose a due date';
+        const c = a.control ? controlById(a.control) || (state.systems.find((y) => y.id === id)?.customControls || []).find((k) => k.id === a.control) : null;
+        updateSystem(id, (x) => ({ ...x, actions: [...(x.actions || []), {
+          id: uid('act'), qid: `manual:${a.control || 'none'}`, source: CAN.review(state.role) ? 'reviewer' : 'manual', control: a.control || null,
+          topic: (a.topic || c?.name || 'Action').slice(0, 60), action: a.action.trim(), principle: 'accountability',
+          refs: c ? `Control ${c.id}` : '', priority: ['High', 'Medium', 'Low'].includes(a.priority) ? a.priority : 'Medium',
+          due: a.due, status: 'Open', owner: (a.owner || '').trim(), raisedBy: state.role,
+        }] }), 'Action added', `${a.topic || c?.name || ''}: ${a.action.trim()}`);
+        return '';
+      },
+      // Product-specific control on top of the library (e.g. a sector rule).
+      addControl: (id, k) => {
+        if (!CAN.work(state.role) && !CAN.review(state.role)) return 'Not allowed';
+        if (String(k.name || '').trim().length < 4) return 'Name the control';
+        updateSystem(id, (x) => ({ ...x, customControls: [...(x.customControls || []), {
+          id: `CUS-${String((x.customControls || []).length + 1).padStart(2, '0')}`, name: k.name.trim(), family: k.family || 'Custom',
+          type: k.type || 'Preventive', compass: k.compass || 'accountability', owner: (k.owner || '').trim(), frequency: k.frequency || 'Per release',
+          description: (k.description || '').trim(), status: 'Designed', addedBy: state.role, at: nowIso(),
+        }] }), 'Control added', k.name.trim());
+        return '';
+      },
+      updateControl: (id, cid, patch) => (CAN.work(state.role) || CAN.review(state.role)) && updateSystem(id, (x) => ({
+        ...x, customControls: (x.customControls || []).map((k) => (k.id === cid ? { ...k, ...patch } : k)),
+      }), 'Control updated', `${cid}: ${Object.entries(patch).map(([a, b]) => `${a} ${b}`).join(', ')}`),
       updateAction: (id, actionId, patch) => CAN.work(state.role) && updateSystem(id, (x) => ({
         ...x, actions: x.actions.map((a) => (a.id === actionId ? { ...a, ...patch } : a)),
       }), 'Action updated', Object.entries(patch).map(([k, v]) => `${k}: ${v}`).join(', ')),

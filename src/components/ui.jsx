@@ -86,13 +86,18 @@ export function Ladder({ q, value, onChange }) {
           </button>
         ))}
       </div>
-      {q.na && (
-        <div className="na-link">
+      <div className="na-link">
+        <button type="button" className="choice unknown" role="radio" aria-checked={value === 'unknown'} onClick={() => onChange(value === 'unknown' ? null : 'unknown')}
+          title="Scored as not in place, and adds an action to find out">
+          <span className="dot" /> Not known
+        </button>
+        {q.na && (
           <button type="button" className="choice" role="radio" aria-checked={value === 'na'} onClick={() => onChange(value === 'na' ? null : 'na')}>
             <span className="dot" /> Not applicable: {q.na.charAt(0).toLowerCase() + q.na.slice(1)}
           </button>
-        </div>
-      )}
+        )}
+      </div>
+      {value === 'unknown' && <p className="xs unknown-hint">Scored as not in place until someone confirms it. An action to find out is added.</p>}
     </>
   );
 }

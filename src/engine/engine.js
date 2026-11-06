@@ -5,11 +5,17 @@ import {
   FRAMEWORKS, PILLARS, ANNEX_III, ALWAYS, RAI, DG, subjectFor, familyOf, cutoffsFor,
 } from '../data/frameworks.js';
 import { QUESTIONS, LEVEL_SCORES } from '../data/questionBank.js';
+import { safeUseCase, safeAvoid, knownTermsFor } from '../lib/redact.js';
 
 export const ADAPTIVE_SHARE = 0.25;           // 25% tailored to the use case, 75% fixed (target band 20-30%)
 export const ACTION_BELOW = 70;               // answers scoring below "In place" create an action
 export const READINESS_CREDIT = 0.35;         // mature controls can lower the risk score by up to 35%
 export const SEVERE_AT = 75;                  // a principle at or above this inherent risk counts as severe
+// "Not known" is an answer, not a gap in the form. It is scored as the worst case until someone finds out:
+// a risk-profile question takes its highest rating, a control question scores as "Not in place" and raises
+// a "find out" action. That way not knowing can never make a product look safer than it is.
+export const UNKNOWN = 'unknown';
+export const isUnknown = (a) => a === UNKNOWN;
 
 // Law names the AI must not bring in when that framework is not in scope.
 const LAW_WORDS = {
@@ -33,6 +39,7 @@ export function emptyProfile() {
 export function profileRating(qid, profile) {
   const q = PROFILE_QUESTIONS.find((x) => x.id === qid);
   const i = profile.answers?.[qid];
+  if (isUnknown(i)) return Math.max(1, ...(q?.options || []).map((o) => o.rating));
   return i == null || !q?.options[i] ? 1 : q.options[i].rating;
 }
 
@@ -267,22 +274,27 @@ export function validateAiQuestions(raw, fws, count, takenTexts = []) {
   return out;
 }
 
-export async function aiAdaptive(profile, fws, count, fixed, { timeoutMs = 30000 } = {}) {
+// Exactly what is sent to the AI model: no names, owners, organisations or identifiers (see lib/redact.js).
+export function aiPayload(profile, fws, count, fixed, known = []) {
+  const flags = profileFlags(profile);
+  return {
+    count, frameworks: fws,
+    useCase: safeUseCase({
+      description: profile.description, domain: profile.domain, systemType: profile.systemType,
+      sourcing: profile.sourcing, geos: profile.geos, data: profile.data, highRisk: flags.highRisk,
+      decisions: flags.decisions, fullyAutomated: flags.fullAuto, transparency: profile.transparency,
+    }, knownTermsFor(profile, known)),
+    avoid: safeAvoid(fixed.map((q) => q.q)),
+  };
+}
+
+export async function aiAdaptive(profile, fws, count, fixed, { timeoutMs = 30000, known = [] } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const flags = profileFlags(profile);
     const res = await fetch('/api/generate-questions', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
-      body: JSON.stringify({
-        count, frameworks: fws,
-        useCase: {
-          name: profile.name, description: profile.description, domain: profile.domain, systemType: profile.systemType,
-          sourcing: profile.sourcing, geos: profile.geos, data: profile.data, highRisk: flags.highRisk,
-          decisions: flags.decisions, fullyAutomated: flags.fullAuto, transparency: profile.transparency,
-        },
-        avoid: fixed.map((q) => q.q),
-      }),
+      body: JSON.stringify(aiPayload(profile, fws, count, fixed, known)),
     });
     if (!res.ok) return { questions: [], error: `AI service returned ${res.status}` };
     const body = await res.json();
@@ -300,6 +312,7 @@ export const hasEvidence = (e) => !!(e && (String(e.ref || '').trim() || String(
 // 'na' | 'unanswered' | 'provided' | 'unsupported' (In place or Evidenced with nothing attached) | 'none'
 export function evidenceState(q, answer, ev) {
   if (answer === 'na') return 'na';
+  if (isUnknown(answer)) return 'unknown';
   if (answer == null || answer === '') return 'unanswered';
   if (hasEvidence(ev)) return 'provided';
   return answer >= 2 ? 'unsupported' : 'none';
@@ -329,6 +342,7 @@ export function evidenceSummary(questions, answers, evidence = {}, review = {}) 
 // ---------- scoring ----------
 export function answerScore(q, a) {
   if (a === 'na' || a == null || a === '') return null;
+  if (isUnknown(a)) return 0;
   return LEVEL_SCORES[a] ?? null;
 }
 
@@ -363,6 +377,8 @@ export function scoreAssessment(profile, fws, questions, answers, customCutoffs 
   const scored = questions.map((q) => ({ q, s: answerScore(q, answers[q.id]) }));
   const answered = scored.filter((x) => x.s != null);
   const unanswered = questions.filter((q) => answers[q.id] == null || answers[q.id] === '').length;
+  const unknownControls = questions.filter((q) => isUnknown(answers[q.id])).map((q) => q.id);
+  const unknownProfile = PROFILE_QUESTIONS.filter((q) => isUnknown(profile.answers?.[q.id])).map((q) => q.id);
 
   const frameworks = {};
   for (const fw of sectionOrder(fws)) {
@@ -397,33 +413,47 @@ export function scoreAssessment(profile, fws, questions, answers, customCutoffs 
   reasons.push(`Controls in place (${readiness}%) bring the score to ${residual}/100: ${TIERS[band(residual, cut)].label} band`);
   if (legal.tier !== 'minimal' || profile.prohibited?.length) reasons.push(`Legal floor: ${TIERS[legal.tier].label}. ${legal.reason}`);
   if (severe.length >= 3) reasons.push(`Floor to High: ${severe.map((p) => PRINCIPLES[p].name).join(', ')} at severe risk`);
+  if (unknownProfile.length) reasons.push(`${unknownProfile.length} risk profile answer${unknownProfile.length > 1 ? 's are' : ' is'} "Not known" and scored as the highest risk until confirmed`);
+  if (unknownControls.length) reasons.push(`${unknownControls.length} control${unknownControls.length > 1 ? 's are' : ' is'} "Not known" and scored as not in place until confirmed`);
 
   return {
     principles, inherent, residual, legal, severe, inherentTier, tier, reasons, readiness, cutoffs: cut,
     readinessStatus: readinessStatus(readiness), frameworks, pillars,
     dg: { score: frameworks.DG.score, ...maturityLevel(frameworks.DG.score) },
     criticalGaps: answered.filter((x) => x.q.weight === 3 && x.s <= 35).map((x) => x.q.id),
-    unanswered, questionCount: questions.length,
+    unanswered, questionCount: questions.length, unknownControls, unknownProfile,
     fixedCount: questions.filter((q) => q.kind === 'core').length,
     adaptiveCount: questions.filter((q) => q.kind !== 'core').length,
   };
 }
 
 // Gaps become remediation actions with a priority and due date.
-export function buildActions(questions, answers, tier, today = new Date()) {
+export function buildActions(questions, answers, tier, today = new Date(), profile = null) {
   const out = [];
   for (const q of questions) {
     const s = answerScore(q, answers[q.id]);
     if (s == null || s >= ACTION_BELOW) continue;
+    const unknown = isUnknown(answers[q.id]);
     let priority = q.weight === 3 || (s === 0 && q.weight === 2) ? 'High' : q.weight === 2 ? 'Medium' : 'Low';
     if (tier === 'high' && priority === 'Medium' && s === 0) priority = 'High';
     const days = { High: 30, Medium: 60, Low: 90 }[priority];
     const due = new Date(today.getTime() + days * 86400000).toISOString().slice(0, 10);
     out.push({
-      id: `${q.id}-${Math.random().toString(36).slice(2, 7)}`, qid: q.id, topic: q.topic, action: q.action,
-      principle: q.principle,
+      id: `${q.id}-${Math.random().toString(36).slice(2, 7)}`, qid: q.id, topic: q.topic,
+      action: unknown ? `Find out whether this control exists and re-answer the question, then: ${q.action}` : q.action,
+      principle: q.principle, source: unknown ? 'unknown' : 'assessment',
       refs: Object.entries(q.maps).map(([k, v]) => `${sectionName(k)} ${v}`).join('; '),
       priority, due, status: 'Open', owner: '',
+    });
+  }
+  // Risk profile answers given as "Not known": find out, then re-assess, since the tier may drop.
+  for (const pq of PROFILE_QUESTIONS) {
+    if (!isUnknown(profile?.answers?.[pq.id])) continue;
+    out.push({
+      id: `P-${pq.id}-${Math.random().toString(36).slice(2, 7)}`, qid: `profile:${pq.id}`, topic: 'Confirm risk profile',
+      action: `Find out: ${pq.q} It is scored as the highest risk until answered, so re-assess once known.`,
+      principle: pq.principle, refs: 'Risk profile', source: 'unknown',
+      priority: 'High', due: new Date(today.getTime() + 30 * 86400000).toISOString().slice(0, 10), status: 'Open', owner: '',
     });
   }
   const rank = { High: 0, Medium: 1, Low: 2 };

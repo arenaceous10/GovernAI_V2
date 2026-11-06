@@ -57,18 +57,18 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   const p2 = await open(); await p2.goto(URL); await W(p2, 800); await enter(p2, 'Governance reviewer');
   await p2.goto(URL + '#product--sys-1'); await W(p2); assert(await p2.locator('main input[type=checkbox]').count() === 0, 'reviewer cannot tick');
   await p2.goto(URL + '#product--sys-1'); await W(p2); await p2.getByRole('tab', { name: 'Lifecycle' }).click(); await W(p2);
-  assert(await p2.locator('.check-ro.on', { hasText: 'Access follows least privilege' }).count() === 1, 'second browser sees the change');
+  assert(await p2.locator('.check-item.done', { hasText: 'Access follows least privilege' }).count() === 1, 'second browser sees the change');
   assert(db.tables.v2_products.length === 8, 'no duplicate seeding by the second load');
 
   // 6. save failure: warning, then retry saves it
   await p.goto(URL + '#product--sys-1'); await W(p); await p.getByRole('tab', { name: 'Lifecycle' }).click(); await W(p);
   db.fail = { method: '*', status: 500, message: 'injected failure' };
-  await p.getByRole('checkbox', { name: /Accessibility and inclusive design/ }).check(); await W(p, 600);
+  await p.getByRole('checkbox', { name: /Deployment architecture supports/ }).check(); await W(p, 600);
   assert((await body(p)).includes('Not saved'), 'failure shown');
-  assert(!productsRow('sys-1').data.stages['4'].checklist['Accessibility and inclusive design requirements are implemented.'], 'not saved while failing');
+  assert(!productsRow('sys-1').data.stages['4'].checklist['Deployment architecture supports monitoring, rollback and kill switch.'], 'not saved while failing');
   db.fail = null; await btn(p, 'Retry').click(); await W(p, 600);
   assert(!(await body(p)).includes('Not saved'), 'retry cleared the warning');
-  assert(productsRow('sys-1').data.stages['4'].checklist['Accessibility and inclusive design requirements are implemented.'] === true, 'retry saved the change');
+  assert(productsRow('sys-1').data.stages['4'].checklist['Deployment architecture supports monitoring, rollback and kill switch.'] === true, 'retry saved the change');
 
   // 7. admin changes settings and resets the demo data (settings and signed-up organisations are kept)
   await signOut(p); await enter(p, 'admin');

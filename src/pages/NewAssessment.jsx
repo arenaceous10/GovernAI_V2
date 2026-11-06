@@ -7,7 +7,7 @@ import {
 import { COUNTRIES, REGIONS } from '../data/countries.js';
 import {
   emptyProfile, fixedQuestions, adaptiveTarget, selectAdaptive, aiAdaptive, orderQuestions, sectionOf, sectionOrder,
-  scoreAssessment, buildActions,
+  scoreAssessment, buildActions, UNKNOWN,
 } from '../engine/engine.js';
 import { Field, Ladder, Multi, Panel, Single } from '../components/ui.jsx';
 import Combobox from '../components/Combobox.jsx';
@@ -110,7 +110,9 @@ export default function NewAssessment({ nav, existing }) {
     const target = adaptiveTarget(fixed.length);
     let adaptive = []; let src = 'Rule-based tailoring';
     if (state.settings.aiQuestions) {
-      const ai = await aiAdaptive(prof, fws, target, fixed);
+      // Names the AI must never see, on top of the product's own name, owner and business unit.
+      const known = [...state.clients.map((c) => c.name), ...(state.users || []).map((u) => u.name), state.me?.name].filter(Boolean);
+      const ai = await aiAdaptive(prof, fws, target, fixed, { known });
       if (ai.questions.length) { adaptive = ai.questions; src = `AI (${ai.model || 'Gemini'})`; }
     }
     if (adaptive.length < target) adaptive = [...adaptive, ...selectAdaptive(prof, fws, target - adaptive.length, overrides, new Set(adaptive.map((q) => q.id)), custom)];
@@ -145,7 +147,7 @@ export default function NewAssessment({ nav, existing }) {
     if (unanswered) { setShowErr(true); return; }
     const profile = profileFor();
     const results = scoreAssessment(profile, fws, questions, answers, state.settings.cutoffs);
-    const actions = buildActions(questions, answers, results.tier);
+    const actions = buildActions(questions, answers, results.tier, new Date(), profile);
     const assessment = { at: new Date().toISOString(), by: state.role, profile, frameworks: fws, questions, answers, results, questionSource: source };
     const id = register(reassess ? existing.id : draftId, meta(), assessment, actions);
     nav(`/product/${id}`);
@@ -279,10 +281,11 @@ export default function NewAssessment({ nav, existing }) {
                     <Field key={q.id} label={q.q}>
                       <Single
                         className="choices risk-options"
-                        options={q.options.map((o, i) => ({ value: i, label: o.label }))}
+                        options={[...q.options.map((o, i) => ({ value: i, label: o.label })), { value: UNKNOWN, label: 'Not known' }]}
                         value={p.answers[q.id]}
-                        onChange={(v) => up({ answers: { ...p.answers, [q.id]: Number(v) } })}
+                        onChange={(v) => up({ answers: { ...p.answers, [q.id]: v === UNKNOWN ? UNKNOWN : Number(v) } })}
                       />
+                      {p.answers[q.id] === UNKNOWN && <p className="xs unknown-hint">Scored as the highest risk until confirmed. An action to find out is added.</p>}
                     </Field>
                   ))}
                 </div>
@@ -366,6 +369,7 @@ export default function NewAssessment({ nav, existing }) {
             <dt>Sourcing</dt><dd>{selectionLabel(SOURCING, p.sourcing, p.sourcingOther)}</dd>
             <dt>Frameworks</dt><dd>{fws.map(fwName).join(', ')}</dd>
             <dt>Questions</dt><dd>{answered} of {questions.length} answered ({questions.filter((q) => q.kind === 'core').length} standard, {questions.filter((q) => q.kind !== 'core').length} tailored)</dd>
+            <dt>Not known</dt><dd>{questions.filter((q) => answers[q.id] === UNKNOWN).length} control{questions.filter((q) => answers[q.id] === UNKNOWN).length === 1 ? '' : 's'}, {Object.values(p.answers).filter((v) => v === UNKNOWN).length} risk profile answer{Object.values(p.answers).filter((v) => v === UNKNOWN).length === 1 ? '' : 's'}. Each one is scored as the worst case and becomes a "find out" action.</dd>
           </dl>
           {unanswered > 0 && (
             <div className="callout bad" style={{ marginTop: 14 }}>

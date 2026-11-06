@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, Check, CheckCircle2, ChevronDown, Circle, CornerDownLeft, Download, ExternalLink, Gavel, Link2, Loader2, Lock, Paperclip, RefreshCw, Send, ShieldCheck, X } from 'lucide-react';
+import { ArrowLeft, BookMarked, Check, CheckCircle2, ChevronDown, Circle, SkipForward, Plus, Presentation, FileText, CornerDownLeft, Download, ExternalLink, Gavel, Link2, Loader2, Lock, Paperclip, RefreshCw, Send, ShieldCheck, X } from 'lucide-react';
 import { uploadEvidence, evidenceUrl, removeEvidence, hasFile, isLink, fmtSize } from '../lib/files.js';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { TIERS, DOMAINS, SOURCING, PRINCIPLES, selectionLabel, systemTypeLabel } from '../data/frameworks.js';
@@ -7,7 +7,9 @@ import { geoName } from '../data/countries.js';
 import { STAGES, stageOf, requiredApprovals, ROLES, STAGE_STATUS, GATE_STAGES, ON_DEMAND, phaseOf } from '../data/lifecycle.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
 import { sectionOf, sectionOrder } from '../engine/engine.js';
+import { controlFor, itemState, isMandatory, validReason, controlStatus, SKIP_REASONS, MIN_REASON, COMPASS, COMPASS_IDS } from '../data/controls.js';
 import { downloadReport } from '../engine/report.js';
+import { downloadDeck } from '../engine/deck.js';
 import { Panel, Pill, Tabs, TierBadge, fmtDate, StatusPill, Field } from '../components/ui.jsx';
 import { LifecycleRail, Ring } from '../components/Stages.jsx';
 import { toast, ProductDeadlines } from '../components/Extras.jsx';
@@ -108,11 +110,13 @@ function ReviewBox({ s, n, rec }) {
   if (!mySlot) return null;
   const st = stageOf(n);
   const done = st.checklist.filter((i) => rec.checklist[i]).length + st.evidence.filter((i) => rec.evidence[i]).length;
+  const skips = st.checklist.filter((i) => rec.skipped?.[i]);
   const decide = (outcome) => { reviewStage(s.id, n, mySlot, outcome, comment.trim(), internal.trim()); setComment(''); setInternal(''); toast(outcome === 'Returned' ? `Stage ${n} returned to the client` : `Stage ${n} ${outcome.toLowerCase()}`, outcome === 'Returned' ? 'warn' : 'good'); };
   return (
     <section className="panel decision">
       <div className="decision-head"><Gavel size={16} /> <h2>Your decision</h2></div>
       <p className="small mute">{done} of {st.checklist.length + st.evidence.length} items completed by the client.{rec.note ? ` Note: "${rec.note}"` : ''}</p>
+      {skips.length > 0 && <div className="callout warn small"><b>{skips.length} check{skips.length > 1 ? 's' : ''} skipped.</b> Read the reasons in the checklist before you decide. Return the stage if a reason is not good enough.</div>}
       <Field label="Comment to the client"><textarea className="input" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Needed to return or add conditions" /></Field>
       <Field label={<span className="row" style={{ gap: 6 }}><Lock size={13} /> Internal note</span>} hint="Only the governance team sees this."><textarea className="input internal" rows={2} value={internal} onChange={(e) => setInternal(e.target.value)} /></Field>
       <div className="decision-actions">
@@ -169,27 +173,72 @@ function Activity({ rec }) {
   );
 }
 
-function ChecklistView({ st, rec, editable, onToggle, onAll }) {
-  const done = st.checklist.filter((i) => rec.checklist[i]).length;
+// One checklist row: tick it, or (if optional) skip it with a reason. Each item names the control it evidences.
+function CheckItem({ item, rec, editable, mandatory, onToggle, onSkip, onUnskip }) {
+  const [open, setOpen] = useState(false);
+  const [cat, setCat] = useState(''); const [reason, setReason] = useState(''); const [due, setDue] = useState(''); const [err, setErr] = useState('');
+  const c = controlFor(item); const st = itemState(rec, item); const sk = rec.skipped?.[item];
+  const why = SKIP_REASONS.find((r) => r.id === (sk?.category || cat));
+  const hint = reason ? validReason(reason) : '';
+  const save = () => { const e = onSkip({ category: cat, reason, due }); if (e) setErr(e); else { setOpen(false); setReason(''); setCat(''); setDue(''); setErr(''); toast('Check skipped with a reason'); } };
   return (
-    <Panel title="Checklist" right={<span className="count-chip num">{done}/{st.checklist.length}</span>}>
-      {st.checklist.map((item) => (editable ? (
-        <label key={item} className="check-row">
-          <input type="checkbox" checked={!!rec.checklist[item]} onChange={() => onToggle(item)} />
-          <span>{item}</span>
-        </label>
-      ) : (
-        <div key={item} className={`check-ro ${rec.checklist[item] ? 'on' : ''}`}>
-          {rec.checklist[item] ? <CheckCircle2 size={17} /> : <Circle size={17} />}<span>{item}</span>
+    <div className={`check-item ${st}`}>
+      <div className="check-line">
+        {editable && st !== 'skipped'
+          ? <input type="checkbox" aria-label={item} checked={st === 'done'} onChange={onToggle} />
+          : st === 'done' ? <CheckCircle2 size={17} className="ci-ico done" /> : st === 'skipped' ? <SkipForward size={16} className="ci-ico skip" /> : <Circle size={17} className="ci-ico" />}
+        <span className="ci-text">{item}</span>
+        <span className="ci-tags">
+          <span className={`ci-tag ${mandatory ? 'must' : ''}`}>{mandatory ? 'Mandatory' : 'Optional'}</span>
+          <span className="ci-tag ctl" title={`${c.name} · ${c.family} · ${c.type}`}>{c.id}</span>
+        </span>
+        {editable && !mandatory && st === 'open' && !open && <button type="button" className="btn ghost sm" onClick={() => setOpen(true)}>Skip</button>}
+        {editable && st === 'skipped' && <button type="button" className="btn ghost sm" onClick={onUnskip}>Undo skip</button>}
+      </div>
+      {st === 'skipped' && sk && (
+        <div className="ci-skip"><b>Skipped: {why?.label}.</b> {sk.reason}{sk.due ? ` Target date ${sk.due}.` : ''}{why?.action ? ' An action was added.' : ''}</div>
+      )}
+      {open && (
+        <div className="ci-form fade-in">
+          <div className="grid g2">
+            <Field label="Why skip it?">
+              <select className="input" value={cat} onChange={(e) => { setCat(e.target.value); setErr(''); }}>
+                <option value="">Choose…</option>{SKIP_REASONS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+              </select>
+            </Field>
+            {why?.needsDate && <Field label="Done by"><input className="input" type="date" value={due} onChange={(e) => setDue(e.target.value)} /></Field>}
+          </div>
+          <Field label="Explain for the reviewer" hint={hint || `At least ${MIN_REASON} characters. The governance team sees this.`}>
+            <textarea className="input" rows={2} value={reason} onChange={(e) => { setReason(e.target.value); setErr(''); }} aria-label={`Reason for skipping ${item}`} />
+          </Field>
+          {err && <div className="xs" role="alert" style={{ color: 'var(--bad)' }}>{err}</div>}
+          <div className="row"><button type="button" className="btn primary sm" disabled={!cat || !!validReason(reason)} onClick={save}>Skip with this reason</button><button type="button" className="btn ghost sm" onClick={() => { setOpen(false); setErr(''); }}>Cancel</button></div>
         </div>
-      )))}
-      {editable && done < st.checklist.length && <button type="button" className="btn ghost sm" style={{ marginTop: 6, paddingLeft: 0 }} onClick={onAll}>Tick all</button>}
+      )}
+    </div>
+  );
+}
+
+function ChecklistView({ st, rec, editable, tier, rules, onToggle, onAll, onSkip, onUnskip }) {
+  const done = st.checklist.filter((i) => rec.checklist[i]).length;
+  const skipped = st.checklist.filter((i) => itemState(rec, i) === 'skipped').length;
+  const mand = st.checklist.filter((i) => isMandatory(i, tier, rules)).length;
+  return (
+    <Panel title="Checklist" sub={`${mand} mandatory, ${st.checklist.length - mand} optional. Optional checks can be skipped with a reason.`}
+      right={<span className="count-chip num">{done}/{st.checklist.length}{skipped ? ` · ${skipped} skipped` : ''}</span>}>
+      {st.checklist.map((item) => (
+        <CheckItem key={item} item={item} rec={rec} editable={editable} mandatory={isMandatory(item, tier, rules)}
+          onToggle={() => onToggle(item)} onSkip={(v) => onSkip(item, v)} onUnskip={() => onUnskip(item)} />
+      ))}
+      {editable && done + skipped < st.checklist.length && <button type="button" className="btn ghost sm" style={{ marginTop: 6, paddingLeft: 0 }} onClick={onAll}>Tick all</button>}
     </Panel>
   );
 }
 
 function StageView({ s, n }) {
-  const { role, toggleCheck, checkAll, setEvidence, submitStage, override, startEvent } = useStore();
+  const { role, toggleCheck, checkAll, skipCheck, unskipCheck, setEvidence, submitStage, override, startEvent, state } = useStore();
+  const rules = state.settings.checklistRules || {};
+  const tier = s.assessment.results.tier;
   const [howOpen, setHowOpen] = useState(false);
   const [note, setNote] = useState('');
   const [reason, setReason] = useState('');
@@ -199,9 +248,10 @@ function StageView({ s, n }) {
   const isCurrent = n === s.stage && !['Retired', 'Blocked'].includes(s.status);
   const working = isCurrent && ['open', 'returned'].includes(rec.status);
   const canEdit = working && CAN.work(role);
-  const blockers = stageBlockers(s);
+  const blockers = stageBlockers(s, rules);
   const total = st.checklist.length + st.evidence.length;
-  const doneN = st.checklist.filter((i) => rec.checklist[i]).length + st.evidence.filter((i) => rec.evidence[i]).length;
+  const skippedN = st.checklist.filter((i) => itemState(rec, i) === 'skipped').length;
+  const doneN = st.checklist.filter((i) => rec.checklist[i]).length + skippedN + st.evidence.filter((i) => rec.evidence[i]).length;
   const evCount = st.evidence.filter((i) => rec.evidence[i]).length;
   const status = isCurrent || rec.status === 'approved' ? STAGE_STATUS[rec.status] : ON_DEMAND.includes(n) ? 'Only if needed' : 'Not started';
   const ph = phaseOf(n);
@@ -227,7 +277,8 @@ function StageView({ s, n }) {
         {isCurrent && rec.status === 'submitted' && role === 'client' && <div className="callout"><b>With the governance team.</b> Submitted {fmtDate(rec.submittedAt)}. You'll see their decision here.</div>}
         {working && !CAN.work(role) && <div className="callout small"><b>The client is working on this stage.</b> You can review it once they submit.</div>}
 
-        <ChecklistView st={st} rec={rec} editable={canEdit} onToggle={(item) => toggleCheck(s.id, n, item)} onAll={() => checkAll(s.id, n, st.checklist)} />
+        <ChecklistView st={st} rec={rec} editable={canEdit} tier={tier} rules={rules} onToggle={(item) => toggleCheck(s.id, n, item)} onAll={() => checkAll(s.id, n, st.checklist)}
+          onSkip={(item, v) => skipCheck(s.id, n, item, v)} onUnskip={(item) => unskipCheck(s.id, n, item)} />
         <Panel title="Evidence" right={<span className="count-chip num">{evCount}/{st.evidence.length}</span>}>
           {st.evidence.map((item) => (
             <EvidenceItem key={`${n}-${item}`} item={item} value={rec.evidence[item]} editable={canEdit} systemId={s.id} stage={n} onSave={(v) => setEvidence(s.id, n, item, v)} />
@@ -241,7 +292,7 @@ function StageView({ s, n }) {
             <Ring done={doneN} total={total} size={58} />
             <div>
               <div className="small"><b>{doneN} of {total}</b> items done</div>
-              <div className="xs mute">{st.checklist.length} checks · {st.evidence.length} evidence items</div>
+              <div className="xs mute">{st.checklist.length} checks{skippedN ? ` (${skippedN} skipped)` : ''} · {st.evidence.length} evidence items</div>
             </div>
           </div>
           {canEdit && (
@@ -328,8 +379,8 @@ function Assessment({ s, nav }) {
                     return (
                       <tr key={q.id}>
                         <td style={{ maxWidth: 460 }}>{q.q}<div className="xs mute">{PRINCIPLES[q.principle]?.short}{q.kind !== 'core' ? ', tailored' : ''}</div></td>
-                        <td className="small" style={{ maxWidth: 300 }}>{v === 'na' ? 'Not applicable' : q.options[v]}</td>
-                        <td>{v === 'na' ? <Pill>N/A</Pill> : <Pill tone={['bad', 'warn', 'ok', 'good'][v]}>{LEVEL_NAMES[v]}</Pill>}</td>
+                        <td className="small" style={{ maxWidth: 300 }}>{v === 'na' ? 'Not applicable' : v === 'unknown' ? 'Not known: scored as not in place until confirmed' : q.options[v]}</td>
+                        <td>{v === 'na' ? <Pill>N/A</Pill> : v === 'unknown' ? <Pill tone="warn">Not known</Pill> : <Pill tone={['bad', 'warn', 'ok', 'good'][v]}>{LEVEL_NAMES[v]}</Pill>}</td>
                       </tr>
                     );
                   })}
@@ -343,33 +394,104 @@ function Assessment({ s, nav }) {
   );
 }
 
-function Actions({ s }) {
-  const { updateAction, role } = useStore();
-  const today = new Date().toISOString().slice(0, 10);
-  if (!s.actions.length) return <Panel><div className="empty">No gaps found.</div></Panel>;
+const CTL_TONE = { Operating: 'good', 'In progress': 'ok', Partial: 'warn', Gap: 'bad', Designed: 'ok' };
+const SRC = { checklist: 'From a skipped check', unknown: 'From a "Not known" answer', reviewer: 'Required by the governance team', manual: 'Added by the client', assessment: 'From the assessment' };
+
+// Controls: library controls evidenced by the lifecycle checklist, plus any controls added for this product.
+function ControlsPanel({ s }) {
+  const { state, role, addAction, addControl } = useStore();
+  const rows = controlStatus(s, state.settings.checklistRules || {});
+  const can = CAN.work(role) || CAN.review(role);
+  const [raise, setRaise] = useState(null); const [form, setForm] = useState({ action: '', priority: 'Medium', due: '', owner: '' });
+  const [adding, setAdding] = useState(false); const [k, setK] = useState({ name: '', family: 'Custom', type: 'Preventive', compass: 'accountability', owner: '', frequency: 'Per release', description: '' });
+  const [err, setErr] = useState('');
+  const submitAction = () => { const e = addAction(s.id, { ...form, control: raise.id, topic: raise.name }); if (e) setErr(e); else { setRaise(null); setForm({ action: '', priority: 'Medium', due: '', owner: '' }); setErr(''); toast('Action added'); } };
+  const submitControl = () => { const e = addControl(s.id, k); if (e) setErr(e); else { setAdding(false); setK({ ...k, name: '', description: '', owner: '' }); setErr(''); toast('Control added'); } };
+  const gaps = rows.filter((r) => r.status === 'Gap' || r.status === 'Partial').length;
   return (
-    <Panel>
+    <Panel title="Controls" sub={`${rows.filter((r) => r.status === 'Operating').length} operating, ${gaps} with a gap, ${rows.length} evidenced so far by the lifecycle checklist`}
+      right={can && !adding && <button className="btn sm" onClick={() => { setAdding(true); setErr(''); }}><Plus size={14} /> Add a control</button>}>
+      {adding && (
+        <div className="ci-form" style={{ margin: '0 0 12px' }}>
+          <div className="grid g3">
+            <Field label="Control name"><input className="input" value={k.name} onChange={(e) => setK({ ...k, name: e.target.value })} placeholder="e.g. Quarterly bias review by the claims team" /></Field>
+            <Field label="Type"><select className="input" value={k.type} onChange={(e) => setK({ ...k, type: e.target.value })}>{['Preventive', 'Detective', 'Corrective'].map((x) => <option key={x}>{x}</option>)}</select></Field>
+            <Field label="Compass direction"><select className="input" value={k.compass} onChange={(e) => setK({ ...k, compass: e.target.value })}>{COMPASS_IDS.map((x) => <option key={x} value={x}>{COMPASS[x].name}</option>)}</select></Field>
+            <Field label="Control owner"><input className="input" value={k.owner} onChange={(e) => setK({ ...k, owner: e.target.value })} placeholder="Role or name" /></Field>
+            <Field label="How often"><select className="input" value={k.frequency} onChange={(e) => setK({ ...k, frequency: e.target.value })}>{['Per release', 'Continuous', 'Monthly', 'Quarterly', 'Yearly'].map((x) => <option key={x}>{x}</option>)}</select></Field>
+            <Field label="What it does"><input className="input" value={k.description} onChange={(e) => setK({ ...k, description: e.target.value })} /></Field>
+          </div>
+          {err && <div className="xs" role="alert" style={{ color: 'var(--bad)' }}>{err}</div>}
+          <div className="row"><button className="btn primary sm" disabled={k.name.trim().length < 4} onClick={submitControl}>Add control</button><button className="btn ghost sm" onClick={() => setAdding(false)}>Cancel</button></div>
+        </div>
+      )}
       <div className="table-wrap">
         <table className="table">
-          <thead><tr><th>Priority</th><th>Action</th><th>Owner</th><th>Due</th><th>Status</th></tr></thead>
+          <thead><tr><th>Control</th><th>Compass</th><th>Checks</th><th>Status</th><th /></tr></thead>
           <tbody>
-            {s.actions.map((a) => (
-              <tr key={a.id}>
-                <td><Pill tone={{ High: 'bad', Medium: 'warn', Low: 'ok' }[a.priority]}>{a.priority}</Pill></td>
-                <td style={{ maxWidth: 420 }}><b style={{ fontWeight: 500 }}>{a.topic}</b><div className="small mute">{a.action}</div></td>
-                <td><input className="input" aria-label={`Owner of ${a.topic}`} disabled={!CAN.work(role)} style={{ width: 150, padding: '5px 8px' }} value={a.owner} onChange={(e) => updateAction(s.id, a.id, { owner: e.target.value })} placeholder="Unassigned" /></td>
-                <td className={`num small ${a.status !== 'Done' && a.due < today ? 'tone-bad' : ''}`}>{a.due}</td>
-                <td>
-                  <select className="input" aria-label={`Status of ${a.topic}`} disabled={!CAN.work(role)} style={{ width: 130, padding: '5px 8px' }} value={a.status} onChange={(e) => updateAction(s.id, a.id, { status: e.target.value })}>
-                    {['Open', 'In progress', 'Done'].map((x) => <option key={x}>{x}</option>)}
-                  </select>
+            {[...rows.map((r) => ({ id: r.control.id, name: r.control.name, family: r.control.family, type: r.control.type, compass: r.control.compass, r })), ...(s.customControls || []).map((c) => ({ ...c, custom: true }))].map((c) => (
+              <tr key={c.id}>
+                <td style={{ maxWidth: 380 }}><b style={{ fontWeight: 500 }}><span className="ci-tag ctl">{c.id}</span> {c.name}</b>
+                  <div className="xs mute">{c.family} · {c.type}{c.custom ? ` · ${c.frequency}${c.owner ? ` · owner ${c.owner}` : ''}` : ''}{c.r?.mandatory ? ' · mandatory' : ''}</div>
+                  {c.r && c.r.items.filter((i) => i.state === 'skipped').map((i) => <div key={i.item} className="xs ci-skip" style={{ margin: '4px 0 0' }}>Stage {i.stage}: {i.item} Skipped: {i.skip?.reason}</div>)}
                 </td>
+                <td className="small">{COMPASS[c.compass]?.name}</td>
+                <td className="small num">{c.r ? `${c.r.done} done${c.r.skipped ? `, ${c.r.skipped} skipped` : ''}${c.r.open ? `, ${c.r.open} open` : ''}` : 'Product control'}</td>
+                <td><Pill tone={CTL_TONE[c.r ? c.r.status : c.status]}>{c.r ? c.r.status : c.status}</Pill></td>
+                <td>{can && <button className="btn ghost sm" onClick={() => { setRaise(c); setErr(''); }}>Raise action</button>}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {raise && (
+        <div className="ci-form" style={{ margin: '12px 0 0' }}>
+          <b className="small">New action on {raise.id} {raise.name}</b>
+          <div className="grid g3">
+            <Field label="Action"><input className="input" value={form.action} onChange={(e) => setForm({ ...form, action: e.target.value })} placeholder="What has to be done" /></Field>
+            <Field label="Priority"><select className="input" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>{['High', 'Medium', 'Low'].map((x) => <option key={x}>{x}</option>)}</select></Field>
+            <Field label="Due"><input className="input" type="date" value={form.due} onChange={(e) => setForm({ ...form, due: e.target.value })} /></Field>
+          </div>
+          {err && <div className="xs" role="alert" style={{ color: 'var(--bad)' }}>{err}</div>}
+          <div className="row"><button className="btn primary sm" onClick={submitAction}>Add action</button><button className="btn ghost sm" onClick={() => setRaise(null)}>Cancel</button></div>
+        </div>
+      )}
     </Panel>
+  );
+}
+
+function Actions({ s }) {
+  const { updateAction, role } = useStore();
+  const today = new Date().toISOString().slice(0, 10);
+  return (
+    <div className="stack">
+      <Panel title="Actions" sub="Gaps from the assessment, skipped checks, Not known answers and actions raised on controls">
+        {!s.actions.length ? <div className="empty">No gaps found.</div> : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>Priority</th><th>Action</th><th>Owner</th><th>Due</th><th>Status</th></tr></thead>
+              <tbody>
+                {s.actions.map((a) => (
+                  <tr key={a.id}>
+                    <td><Pill tone={{ High: 'bad', Medium: 'warn', Low: 'ok' }[a.priority]}>{a.priority}</Pill></td>
+                    <td style={{ maxWidth: 420 }}><b style={{ fontWeight: 500 }}>{a.topic}</b><div className="small mute">{a.action}</div>
+                      <div className="xs mute">{SRC[a.source] || SRC.assessment}{a.control ? ` · control ${a.control}` : ''}</div></td>
+                    <td><input className="input" aria-label={`Owner of ${a.topic}`} disabled={!CAN.work(role)} style={{ width: 150, padding: '5px 8px' }} value={a.owner} onChange={(e) => updateAction(s.id, a.id, { owner: e.target.value })} placeholder="Unassigned" /></td>
+                    <td className={`num small ${a.status !== 'Done' && a.due < today ? 'tone-bad' : ''}`}>{a.due}</td>
+                    <td>
+                      <select className="input" aria-label={`Status of ${a.topic}`} disabled={!CAN.work(role)} style={{ width: 130, padding: '5px 8px' }} value={a.status} onChange={(e) => updateAction(s.id, a.id, { status: e.target.value })}>
+                        {['Open', 'In progress', 'Done'].map((x) => <option key={x}>{x}</option>)}
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+      <ControlsPanel s={s} />
+    </div>
   );
 }
 
@@ -439,6 +561,33 @@ function History({ s }) {
   );
 }
 
+// Two outputs: a dashboard deck (PowerPoint with native, editable charts) and the full audit report (HTML).
+function ReportMenu({ s, audit, client }) {
+  const { state } = useStore();
+  const [open, setOpen] = useState(false); const [busy, setBusy] = useState(false);
+  const deck = async () => {
+    setBusy(true);
+    try { await downloadDeck(s, { audit, client, rules: state.settings.checklistRules || {} }); toast('Dashboard deck downloaded'); }
+    catch (e) { toast(`Could not build the deck: ${e.message}`, 'warn'); }
+    finally { setBusy(false); setOpen(false); }
+  };
+  return (
+    <div className="menu-wrap">
+      <button className="btn" aria-expanded={open} onClick={() => setOpen(!open)}><Download size={15} /> Report <ChevronDown size={14} /></button>
+      {open && (
+        <div className="menu fade-in" role="menu">
+          <button role="menuitem" className="menu-item" disabled={busy} onClick={deck}>
+            {busy ? <Loader2 size={16} className="spin" /> : <Presentation size={16} />}<span><b>Dashboard deck</b><span className="xs mute">PowerPoint: charts, AI Compass, SWOT</span></span>
+          </button>
+          <button role="menuitem" className="menu-item" onClick={() => { downloadReport(s, audit, client); setOpen(false); }}>
+            <FileText size={16} /><span><b>Full audit report</b><span className="xs mute">HTML: every answer, approval and log entry</span></span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Product({ id, nav, back }) {
   const { getSystem, state, role } = useStore();
   const [tab, setTab] = useState('lifecycle');
@@ -469,7 +618,10 @@ export default function Product({ id, nav, back }) {
             {yourTurn && <span className="your-turn">{CAN.work(role) ? 'Your turn' : 'Needs your review'}</span>}
           </div>
         </div>
-        <button className="btn" onClick={() => downloadReport(s, state.audit.filter((x) => x.target === s.id), client)}><Download size={15} /> Report</button>
+        <div className="row hero-btns">
+          <button className="btn" onClick={() => nav(`/card/${s.id}`)}><BookMarked size={15} /> AI card</button>
+          <ReportMenu s={s} audit={state.audit.filter((x) => x.target === s.id)} client={client} />
+        </div>
       </section>
       <Tabs value={tab} onChange={setTab} tabs={[['lifecycle', 'Lifecycle'], ['overview', 'Risk and score'], ['assessment', 'Assessment'], ['data', 'Data and lineage'], ['actions', `Actions (${open})`], ['history', 'History']]} />
       <div key={tab} className="fade-in">

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { LogOut, BookOpen, ClipboardCheck, Database, FilePlus2, History, LayoutDashboard, Library, ListChecks, Settings, Boxes, Users } from 'lucide-react';
+import { LogOut, BookOpen, BookMarked, ClipboardCheck, Database, FilePlus2, History, LayoutDashboard, Library, ListChecks, Settings, Boxes, Users } from 'lucide-react';
 import { ROLES } from './data/lifecycle.js';
 import { useStore, waitingOn } from './store/store.jsx';
 import Landing from './pages/Landing.jsx';
@@ -8,6 +8,7 @@ import NewAssessment from './pages/NewAssessment.jsx';
 import Products from './pages/Products.jsx';
 import Product from './pages/Product.jsx';
 import Catalog from './pages/Catalog.jsx';
+import AICardPage, { CardRegistry } from './pages/AICard.jsx';
 import { ActionsPage, AuditLog, Methodology, ReviewQueue } from './pages/Other.jsx';
 import { AdminBank, AdminClients, AdminSettings } from './pages/Admin.jsx';
 import { NoAccess, Mark } from './components/ui.jsx';
@@ -35,14 +36,15 @@ const PRODUCTS = { to: '/products', label: 'AI products', icon: Boxes };
 const NEW = { to: '/new', label: 'Register a product', icon: FilePlus2 };
 const ACTIONS = { to: '/actions', label: 'Actions', icon: ListChecks };
 const METHOD = { to: '/method', label: 'How it works', icon: BookOpen };
+const CARDS = { to: '/cards', label: 'AI cards', icon: BookMarked };
 const NAV = {
-  client: [DASH, PRODUCTS, NEW, ACTIONS, METHOD],
-  assessor: [DASH, { to: '/queue', label: 'Review queue', icon: ClipboardCheck, badge: true }, PRODUCTS, { to: '/catalog', label: 'Data catalog', icon: Database }, ACTIONS, METHOD],
-  admin: [DASH, PRODUCTS, { to: '/admin', label: 'Clients and users', icon: Users }, { to: '/bank', label: 'Question bank', icon: Library }, { to: '/settings', label: 'Settings', icon: Settings }, { to: '/audit', label: 'Audit log', icon: History }, METHOD],
+  client: [DASH, PRODUCTS, CARDS, NEW, ACTIONS, METHOD],
+  assessor: [DASH, { to: '/queue', label: 'Review queue', icon: ClipboardCheck, badge: true }, PRODUCTS, CARDS, { to: '/catalog', label: 'Data catalog', icon: Database }, ACTIONS, METHOD],
+  admin: [DASH, PRODUCTS, CARDS, { to: '/admin', label: 'Clients and users', icon: Users }, { to: '/bank', label: 'Question bank', icon: Library }, { to: '/settings', label: 'Settings', icon: Settings }, { to: '/audit', label: 'Audit log', icon: History }, METHOD],
 };
 NAV.lead = NAV.assessor;
 // Pages reached by link, per role.
-const EXTRA = { client: ['product', 'draft', 'reassess'], assessor: ['product'], lead: ['product'], admin: ['product'] };
+const EXTRA = { client: ['product', 'draft', 'reassess', 'card'], assessor: ['product', 'card'], lead: ['product', 'card'], admin: ['product', 'card'] };
 
 export default function App() {
   const { role, setRole, state, systems, client, sync, me, signOut } = useStore();
@@ -68,6 +70,8 @@ export default function App() {
   else if (go === '/products') page = <Products nav={nav} />;
   else if (go === '/queue') page = <ReviewQueue nav={nav} />;
   else if (go === '/catalog') page = <Catalog nav={nav} />;
+  else if (go === '/cards') page = <CardRegistry nav={nav} />;
+  else if (go === '/card') page = <AICardPage key={id} id={id} nav={nav} />;
   else if (go === '/actions') page = <ActionsPage nav={nav} />;
   else if (go === '/method') page = <Methodology />;
   else if (go === '/admin') page = <AdminClients />;
@@ -76,7 +80,7 @@ export default function App() {
   else if (go === '/audit') page = <AuditLog />;
   else page = <Dashboard nav={nav} />;
 
-  const current = go === '/product' || go === '/draft' || go === '/reassess' ? '/products' : go;
+  const current = go === '/product' || go === '/draft' || go === '/reassess' ? '/products' : go === '/card' ? '/cards' : go;
   const switchValue = role === 'client' ? `client:${state.clientOrg}` : role;
   return (
     <div className="shell">

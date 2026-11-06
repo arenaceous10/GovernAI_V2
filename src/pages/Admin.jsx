@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import { Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { FRAMEWORKS, SELECTABLE_FRAMEWORKS, PRINCIPLES, TIER_CUTOFFS } from '../data/frameworks.js';
 import { QUESTIONS, LEVEL_NAMES } from '../data/questionBank.js';
-import { ROLES } from '../data/lifecycle.js';
+import { ROLES, STAGES } from '../data/lifecycle.js';
+import { controlFor } from '../data/controls.js';
 import { sectionName } from '../engine/engine.js';
 import { Field, Panel, Pill } from '../components/ui.jsx';
 import { useStore } from '../store/store.jsx';
@@ -406,6 +407,7 @@ export function AdminSettings() {
               Use AI (Gemini, through /api/generate-questions) when it is available
             </label>
             <p className="small mute" style={{ marginTop: 8 }}>The AI writes only within the frameworks the client chose; anything citing another law is dropped. If the AI is off or unreachable, the rules engine picks from {QUESTIONS.filter((q) => q.kind === 'adaptive').length} pool questions. Scores always come from the option position.</p>
+            <p className="small mute" style={{ marginTop: 8 }}><b>What the AI receives:</b> the type of AI, domain, sourcing, countries, data categories, risk flags, the chosen frameworks and the description with names, emails, phone numbers, ID numbers, account numbers, addresses and links removed. It never receives the product name, owner, business unit, organisation, people, datasets, evidence or answers.</p>
           </Panel>
           <CutoffEditor />
           <Panel title="Demo data" sub="Data is stored in this browser only.">
@@ -417,7 +419,47 @@ export function AdminSettings() {
           </Panel>
         </div>
       </div>
+      <ChecklistRules />
     </div>
+  );
+}
+
+// Which lifecycle checks are mandatory. Default follows the control library; High-risk products make more checks mandatory.
+function ChecklistRules() {
+  const { state, setSetting } = useStore();
+  const rules = state.settings.checklistRules || {};
+  const [stage, setStage] = useState(1);
+  const st = STAGES[stage - 1];
+  const set = (item, v) => { const next = { ...rules }; if (v) next[item] = v; else delete next[item]; setSetting('checklistRules', next); };
+  const def = (item) => { const c = controlFor(item); return c.mandatory ? 'Mandatory' : c.highRisk ? 'Mandatory for High risk' : 'Optional'; };
+  return (
+    <Panel title="Checklist rules" sub="Mandatory checks must be ticked before a stage is submitted. Optional checks can be skipped with a reason, which the reviewer sees." style={{ marginTop: 16 }}>
+      <div className="row" style={{ marginBottom: 10 }}>
+        <label className="field" style={{ minWidth: 260 }}><span>Stage</span>
+          <select className="input" value={stage} onChange={(e) => setStage(+e.target.value)}>{STAGES.map((x) => <option key={x.n} value={x.n}>{x.n}. {x.name}</option>)}</select>
+        </label>
+        <span className="xs mute">{Object.keys(rules).length} changed from the default</span>
+      </div>
+      <div className="table-wrap">
+        <table className="table">
+          <thead><tr><th>Check</th><th>Control</th><th>Default</th><th>Rule</th></tr></thead>
+          <tbody>
+            {st.checklist.map((item) => (
+              <tr key={item}>
+                <td className="small" style={{ maxWidth: 420 }}>{item}</td>
+                <td className="small"><span className="ci-tag ctl">{controlFor(item).id}</span> {controlFor(item).name}</td>
+                <td className="small mute">{def(item)}</td>
+                <td>
+                  <select className="input" aria-label={`Rule for ${item}`} style={{ width: 150, padding: '5px 8px' }} value={rules[item] || ''} onChange={(e) => set(item, e.target.value)}>
+                    <option value="">Default</option><option value="mandatory">Always mandatory</option><option value="optional">Always optional</option>
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
   );
 }
 

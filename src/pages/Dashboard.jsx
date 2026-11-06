@@ -7,6 +7,7 @@ import { Panel, TierBadge, StatusPill, fmtDate, CountUp, ParticleField } from '.
 import { StageMini, Ring, stageLabel } from '../components/Stages.jsx';
 import { useStore, waitingOn, CAN } from '../store/store.jsx';
 import { DeadlineRadar } from '../components/Extras.jsx';
+import ClientInsights from '../components/Insights.jsx';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const daysSince = (iso) => (iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)) : 0);
@@ -159,6 +160,8 @@ function ClientHome({ nav }) {
           </div>
         )}
       </section>
+
+      <ClientInsights systems={systems} nav={nav} />
 
       <section className="section">
         <div className="section-head"><h2>Regulatory deadlines</h2><span className="xs mute">Dates that apply to your products</span></div>

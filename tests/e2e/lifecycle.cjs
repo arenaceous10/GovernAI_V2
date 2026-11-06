@@ -1,3 +1,4 @@
+const { answerRiskProfile } = require('./wizard.cjs');
 const { chromium } = require('playwright');
 const { install, newDb, seededDb, signIn, signOut, EMAIL } = require('./fake-supabase.cjs');
 const CLOUD = process.env.CLOUD === '1';
@@ -44,7 +45,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   assert(await p.locator('main input[type=checkbox]').count() === 0, 'reviewer cannot tick');
   assert(await p.getByRole('button', { name: 'Attach' }).count() === 0 && await p.getByRole('button', { name: /Submit/ }).count() === 0 && await btn('Tick all').count() === 0, 'reviewer cannot attach or submit');
   assert((await body()).includes('The client is working on this stage'), 'reviewer told client is working');
-  assert(await p.locator('.check-ro').count() > 0, 'read-only checklist');
+  assert(await p.locator('.check-item').count() > 0, 'read-only checklist');
   t = await body(); assert(/Review workspace/.test(await (async () => { await p.goto(URL + '#dashboard'); await W(); return body(); })()), 'reviewer home');
   await p.goto(URL + '#new'); await W(); assert((await body()).includes('not available for your role'), 'reviewer cannot register');
   await role('client:northwind');
@@ -68,8 +69,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   await S('06-wizard-product'); await noFractal('wizard');
   await btn('Continue').click(); await W();
   await p.getByRole('button', { name: /Use suggested/ }).click(); await S('07-wizard-frameworks'); await btn('Continue').click(); await W();
-  for (const s of await p.locator('main select').all()) { const id = await s.getAttribute('id'); if (['prohibitedAny', 'annex', 'narrow', 'profiling'].includes(id)) continue; await s.selectOption({ index: 2 }); }
-  await p.selectOption('#prohibitedAny', 'no'); await p.selectOption('#annex', 'essential');
+  await answerRiskProfile(p, { idx: 2, annex: 'Essential' });
   await S('08-wizard-risk'); await btn('Continue').click(); await W(1000);
   t = await body(); const m = t.match(/(\d+) of (\d+) answered/); assert(m, 'questionnaire count');
   for (let k = 0; k < 8; k++) {

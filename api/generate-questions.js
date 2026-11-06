@@ -2,6 +2,10 @@
 // Writes the tailored (adaptive) questions with Gemini. The key stays on the server (GEMINI_API_KEY).
 // The model only writes wording; scores come from option position in the app, never from the model.
 // If this endpoint is missing or fails, the app falls back to its rule-based question picker.
+//
+// Privacy: the request body is rebuilt from an allowlist and the description scrubbed again here, so even a
+// modified client cannot send names, contact details, identifiers or secrets to the model. Nothing is logged.
+import { safeUseCase, safeAvoid, looksSensitive } from '../src/lib/redact.js';
 
 const DEFAULT_MODELS = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-lite-latest'];
 const FW_NAMES = {
@@ -64,8 +68,11 @@ export default async function handler(req, res) {
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
   const count = Math.min(25, Math.max(1, parseInt(body.count, 10) || 8));
   const frameworks = Array.isArray(body.frameworks) ? body.frameworks.filter((f) => FW_NAMES[f]) : [];
+  const useCase = safeUseCase(body.useCase || {});
+  const avoid = safeAvoid(body.avoid);
+  if (looksSensitive(useCase.description) || avoid.some(looksSensitive)) return res.status(422).json({ error: 'Refused: the text still looks like it contains personal or secret data' });
   try {
-    const { model, items } = await callGemini(key, buildPrompt({ count, frameworks, useCase: body.useCase || {}, avoid: body.avoid }));
+    const { model, items } = await callGemini(key, buildPrompt({ count, frameworks, useCase, avoid }));
     return res.status(200).json({ model, questions: Array.isArray(items) ? items.slice(0, count * 2) : [] });
   } catch (e) {
     return res.status(502).json({ error: `Gemini unavailable (${String(e.message).replace(key, '[key]')})` });

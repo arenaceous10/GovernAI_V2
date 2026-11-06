@@ -1,4 +1,5 @@
 // Administrator adds questions; a client sees them in a new assessment. Cloud build on port 4174.
+const { answerRiskProfile } = require('./wizard.cjs');
 const { chromium } = require('playwright');
 const { install, seededDb, signIn, signOut } = require('./fake-supabase.cjs');
 const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
@@ -70,8 +71,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   await p.getByRole('checkbox', { name: 'Personal data', exact: true }).click();
   await btn('Continue').click(); await W();
   await p.getByRole('button', { name: /Use suggested/ }).click(); await btn('Continue').click(); await W();
-  for (const s of await p.locator('main select').all()) { const id = await s.getAttribute('id'); if (['prohibitedAny', 'annex', 'narrow', 'profiling'].includes(id)) continue; await s.selectOption({ index: 1 }); }
-  await p.selectOption('#prohibitedAny', 'no'); await p.selectOption('#annex', 'none');
+  await answerRiskProfile(p, { idx: 1, annex: 'none' });
   await btn('Continue').click(); await W(1200);
   let found = false; let off = false;
   for (let k = 0; k < 10; k++) {
