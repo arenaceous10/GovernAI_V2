@@ -15,7 +15,7 @@ const STATUS_TONE = { active: 'good', pending: 'warn', disabled: 'bad' };
 const STATUS_NAME = { active: 'Active', pending: 'Waiting for approval', disabled: 'Turned off' };
 
 // Signed-in mode: people create their own accounts; the administrator approves them and sets role and organisation.
-function PersonRow({ u, clients, meId, onSave }) {
+function PersonRow({ u, clients, users = [], meId, onSave }) {
   const [role, setRole] = useState(u.role || (u.side === 'team' ? u.requestedRole || 'assessor' : 'client'));
   const [clientId, setClientId] = useState(u.clientId || '');
   const [busy, setBusy] = useState(false);
@@ -27,7 +27,12 @@ function PersonRow({ u, clients, meId, onSave }) {
   return (
     <tr>
       <td><b style={{ fontWeight: 500 }}>{u.name}</b><div className="xs mute">{u.email}</div></td>
-      <td className="small">{u.side === 'team' ? `Governance team${u.requestedRole ? ` (asked for ${ROLES[u.requestedRole]?.name.toLowerCase()})` : ''}` : `Client${u.company ? `: ${u.company}` : ''}`}</td>
+      <td className="small">{u.side === 'team' ? `Governance team${u.requestedRole ? ` (asked for ${ROLES[u.requestedRole]?.name.toLowerCase()})` : ''}` : `Client${u.company ? `: ${u.company}` : ''}`}
+        {u.side !== 'team' && u.status === 'pending' && u.clientId && (() => {
+          const members = users.filter((x) => x.id !== u.id && x.clientId === u.clientId && x.status === 'active').length;
+          return <div className="xs mute">{members ? `Joins an organisation with ${members} active member${members > 1 ? 's' : ''}` : 'New organisation, created at sign-up. Check this person really represents it.'}</div>;
+        })()}
+      </td>
       <td>
         <select className="input" aria-label={`Role for ${u.name}`} style={{ width: 190, padding: '5px 8px' }} value={role} disabled={self || busy} onChange={(e) => setRole(e.target.value)}>
           {Object.entries(ROLES).map(([k, r]) => <option key={k} value={k}>{r.name}</option>)}
@@ -61,7 +66,7 @@ function People() {
     <div className="table-wrap">
       <table className="table">
         <thead><tr><th>Person</th><th>Signed up as</th><th>Role and organisation</th><th>Access</th><th /></tr></thead>
-        <tbody>{rows.map((u) => <PersonRow key={`${u.id}-${u.status}-${u.role}-${u.clientId}`} u={u} clients={state.clients} meId={me?.id} onSave={updatePerson} />)}</tbody>
+        <tbody>{rows.map((u) => <PersonRow key={`${u.id}-${u.status}-${u.role}-${u.clientId}`} u={u} clients={state.clients} users={state.users} meId={me?.id} onSave={updatePerson} />)}</tbody>
       </table>
     </div>
   );

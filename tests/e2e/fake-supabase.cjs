@@ -33,7 +33,7 @@ function createAccount(db, { email, password, meta = {}, confirmed = db.autoConf
   let clientId = null; let status = 'pending';
   if (side === 'client' && company) {
     const found = db.tables.v2_clients.find((c) => c.name.toLowerCase() === company.toLowerCase());
-    if (found) clientId = found.id; else { clientId = `cli-${Math.random().toString(16).slice(2, 12)}`; db.tables.v2_clients.push({ id: clientId, name: company }); status = 'active'; }
+    if (found) clientId = found.id; else { clientId = `cli-${Math.random().toString(16).slice(2, 12)}`; db.tables.v2_clients.push({ id: clientId, name: company }); }   // migration 005: new organisations wait too
   }
   db.tables.v2_profiles.push({
     id: acc.id, email: acc.email, name: (meta.name || '').trim() || acc.email.split('@')[0], side,

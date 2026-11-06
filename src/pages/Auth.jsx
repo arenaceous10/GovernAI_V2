@@ -154,7 +154,7 @@ export function AuthScreen({ mode: initial = 'signin', onDone }) {
           <label className="field"><span>Work email</span><input className="input" type="email" autoComplete="email" value={f.email} onChange={(e) => up({ email: e.target.value })} /></label>
           {f.side === 'client' && (
             <label className="field"><span>Organisation</span><input className="input" autoComplete="organization" value={f.company} onChange={(e) => up({ company: e.target.value })} />
-              <small>A new organisation is ready straight away. Joining one that already uses GovernAI needs an administrator's approval.</small></label>
+              <small>An administrator approves every new account before it can see or register AI products.</small></label>
           )}
           {f.side === 'team' && (
             <label className="field"><span>Role you need</span>
@@ -204,7 +204,7 @@ export function PendingScreen({ profile, onSignOut, onCheck }) {
             : broken ? "We couldn't load your access details. Sign out and try again, or contact your administrator."
               : profile?.side === 'team'
                 ? 'Governance team accounts are confirmed by an administrator. You can sign in once your role is assigned.'
-                : `${profile?.company || 'Your organisation'} already uses GovernAI, so an administrator needs to approve you before you can see its products.`}
+                : `An administrator checks every new account before it can see or register AI products, so no one can act for ${profile?.company || 'an organisation'} without being confirmed. You'll get access as soon as you're approved.`}
         </p>
         <p className="small mute">Signed in as {profile?.email}</p>
         <div className="row">

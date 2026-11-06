@@ -44,9 +44,15 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   await signUp(p, { side: 'client', name: 'Short Pw', email: 'short@new.test', company: 'Short Co', password: 'abc' });
   assert((await body(p)).includes('at least 8 characters'), 'password length');
 
-  // 4. client with a new organisation: in straight away, empty portfolio, own org only
+  // 4. client with a new organisation: waits for an administrator, then lands in an empty portfolio, own org only
   await p.getByLabel('Password', { exact: true }).fill(PASSWORD); await p.getByLabel('Full name').fill('Rita Sen'); await p.getByLabel('Work email').fill('rita@acme.test'); await p.getByLabel('Organisation').fill('Acme Health');
-  await btn(p, 'Create account').click(); await p.locator('.shell').waitFor({ timeout: 20000 }); await W(p, 600);
+  await btn(p, 'Create account').click(); await p.locator('.auth-done').waitFor({ timeout: 20000 }); await W(p, 300);
+  t = await body(p); assert(t.includes('Waiting for approval') && t.includes('checks every new account'), 'new organisation waits: ' + t.slice(0, 300));
+  const pendingAcme = db.tables.v2_profiles.find((x) => x.email === 'rita@acme.test');
+  assert(pendingAcme.status === 'pending' && pendingAcme.client_id, 'pending with its new organisation');
+  pendingAcme.status = 'active';   // an administrator approves
+  await btn(p, 'Check again').click(); await p.locator('.shell').waitFor({ timeout: 20000 }); await W(p, 600);
+  await p.goto(URL + '#product--sys-1'); await W(p, 400);
   assert((await body(p)).includes('This product was not found'), 'deep link to another org product shows not found');
   await p.goto(URL + '#dashboard'); await W(p, 400);
   t = await body(p);
@@ -70,7 +76,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
 
   // 5. joining an existing organisation waits for approval
   await signUp(p, { side: 'client', name: 'Copy Cat', email: 'cat@northwind.test', company: 'northwind insurance' });
-  t = await body(p); assert(t.includes('Waiting for approval') && t.includes('already uses GovernAI') && !t.includes('Motor claims'), 'existing org pending');
+  t = await body(p); assert(t.includes('Waiting for approval') && t.includes('checks every new account') && !t.includes('Motor claims'), 'existing org pending');
   await btn(p, 'Sign out').click(); await W(p, 500);
 
   // 6. governance team sign-up waits for an administrator
