@@ -8,8 +8,8 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   const URL = process.env.URL || 'http://localhost:4174/';
   const b = await chromium.launch(); const db = await seededDb(); const errs = [];
   const ctx = await b.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true }); await install(ctx, db);
-  let aiBody = null;
-  await ctx.route('**/api/generate-questions', async (route) => { aiBody = route.request().postData(); await route.fulfill({ status: 503, body: '{"error":"off in test"}' }); });
+  let aiBody = null; let aiAuth = null;
+  await ctx.route('**/api/generate-questions', async (route) => { aiBody = route.request().postData(); aiAuth = route.request().headers().authorization || null; await route.fulfill({ status: 503, body: '{"error":"off in test"}' }); });
   const p = await ctx.newPage(); p.on('pageerror', (e) => errs.push(e.message));
   p.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|generate-questions|503/.test(m.text())) errs.push(m.text()); });
   const W = (ms = 300) => p.waitForTimeout(ms);
@@ -82,6 +82,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
     await p.locator('.risk-pillar .risk-options').first().locator('[role=radio]', { hasText: 'Not known' }).click();
     await p.getByRole('button', { name: 'Continue' }).click(); await W(1500);
     assert(aiBody, 'AI endpoint called');
+    assert(/^Bearer [A-Za-z0-9._-]{20,}$/.test(aiAuth || ''), 'AI call carries the sign-in token');
     for (const leak of ['Zebra', 'Quokka', 'Ottoline', 'Brandsma', 'Northwind', 'ottoline@', '7946', '99887766554', 'Priya']) assert(!aiBody.includes(leak), `AI payload leaked ${leak}`);
     assert(JSON.parse(aiBody).useCase.description.includes('Prices cover'), 'description still useful');
     // answer with "Not known" and register

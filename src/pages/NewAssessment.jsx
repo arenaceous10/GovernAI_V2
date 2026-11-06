@@ -12,6 +12,7 @@ import {
 import { Field, Ladder, Multi, Panel, Single } from '../components/ui.jsx';
 import Combobox from '../components/Combobox.jsx';
 import { fwName } from '../components/Results.jsx';
+import { cloud } from '../lib/cloud.js';
 import { useStore } from '../store/store.jsx';
 
 const STEPS = ['Product', 'Frameworks', 'Risk profile', 'Questionnaire', 'Review'];
@@ -112,7 +113,9 @@ export default function NewAssessment({ nav, existing }) {
     if (state.settings.aiQuestions) {
       // Names the AI must never see, on top of the product's own name, owner and business unit.
       const known = [...state.clients.map((c) => c.name), ...(state.users || []).map((u) => u.name), state.me?.name].filter(Boolean);
-      const ai = await aiAdaptive(prof, fws, target, fixed, { known });
+      // The endpoint only answers signed-in clients and administrators, so send the session token.
+      const token = cloud ? (await cloud.auth.getSession()).data.session?.access_token : null;
+      const ai = await aiAdaptive(prof, fws, target, fixed, { known, token });
       if (ai.questions.length) { adaptive = ai.questions; src = `AI (${ai.model || 'Gemini'})`; }
     }
     if (adaptive.length < target) adaptive = [...adaptive, ...selectAdaptive(prof, fws, target - adaptive.length, overrides, new Set(adaptive.map((q) => q.id)), custom)];

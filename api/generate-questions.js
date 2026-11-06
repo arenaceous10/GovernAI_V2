@@ -6,6 +6,7 @@
 // Privacy: the request body is rebuilt from an allowlist and the description scrubbed again here, so even a
 // modified client cannot send names, contact details, identifiers or secrets to the model. Nothing is logged.
 import { safeUseCase, safeAvoid, looksSensitive } from '../src/lib/redact.js';
+import { guard, MAX_BODY } from '../src/lib/aiGuard.js';
 
 const DEFAULT_MODELS = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-lite-latest'];
 const FW_NAMES = {
@@ -62,10 +63,17 @@ async function callGemini(key, prompt) {
 }
 
 export default async function handler(req, res) {
+  res.setHeader('Cache-Control', 'no-store');
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  if (+(req.headers['content-length'] || 0) > MAX_BODY) return res.status(413).json({ error: 'Request too large' });
   const key = process.env.GEMINI_API_KEY;
-  if (!key) return res.status(503).json({ error: 'GEMINI_API_KEY is not set' });
-  const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+  if (!key) return res.status(503).json({ error: 'AI questions are not configured' });
+  let gate;
+  try { gate = await guard(req); } catch { gate = { status: 503, error: 'AI questions are not available right now' }; }
+  if (!gate.ok) return res.status(gate.status).json({ error: gate.error });
+  let body;
+  try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {}; } catch { return res.status(400).json({ error: 'Invalid JSON' }); }
+  if (JSON.stringify(body).length > MAX_BODY) return res.status(413).json({ error: 'Request too large' });
   const count = Math.min(25, Math.max(1, parseInt(body.count, 10) || 8));
   const frameworks = Array.isArray(body.frameworks) ? body.frameworks.filter((f) => FW_NAMES[f]) : [];
   const useCase = safeUseCase(body.useCase || {});
@@ -75,6 +83,6 @@ export default async function handler(req, res) {
     const { model, items } = await callGemini(key, buildPrompt({ count, frameworks, useCase, avoid }));
     return res.status(200).json({ model, questions: Array.isArray(items) ? items.slice(0, count * 2) : [] });
   } catch (e) {
-    return res.status(502).json({ error: `Gemini unavailable (${String(e.message).replace(key, '[key]')})` });
+    return res.status(502).json({ error: 'The AI model is unavailable; the standard question picker is used instead' });
   }
 }

@@ -288,15 +288,15 @@ export function aiPayload(profile, fws, count, fixed, known = []) {
   };
 }
 
-export async function aiAdaptive(profile, fws, count, fixed, { timeoutMs = 30000, known = [] } = {}) {
+export async function aiAdaptive(profile, fws, count, fixed, { timeoutMs = 30000, known = [], token = null } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch('/api/generate-questions', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, signal: ctrl.signal,
       body: JSON.stringify(aiPayload(profile, fws, count, fixed, known)),
     });
-    if (!res.ok) return { questions: [], error: `AI service returned ${res.status}` };
+    if (!res.ok) { const j = await res.json().catch(() => ({})); return { questions: [], error: j.error || `AI service returned ${res.status}` }; }
     const body = await res.json();
     return { questions: validateAiQuestions(body.questions, fws, count, fixed.map((q) => q.q)), model: body.model };
   } catch (e) {
