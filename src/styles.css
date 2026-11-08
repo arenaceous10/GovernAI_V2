@@ -1099,3 +1099,7 @@ h1, h2, h3 { text-wrap: balance; }
 .brand-preview img { max-height: 32px; max-width: 120px; object-fit: contain; }
 .record .kv { margin-top: 8px; }
 .landing-footnote a { color: inherit; text-decoration: underline; }
+
+.check-item.flash { animation: ci-flash 1.6s ease-out; border-radius: 6px; }
+@keyframes ci-flash { 0%, 40% { background: var(--warn-bg); box-shadow: 0 0 0 2px var(--warn); } 100% { background: transparent; box-shadow: none; } }
+.ci-skip-btn { white-space: nowrap; }

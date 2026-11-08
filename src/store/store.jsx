@@ -67,7 +67,7 @@ export function stageBlockers(sys, rules = {}) {
   const opt = open.length - mand.length;
   const out = [];
   if (mand.length) out.push(`${mand.length} mandatory check${mand.length > 1 ? 's' : ''} still to tick`);
-  if (opt) out.push(`${opt} optional check${opt > 1 ? 's' : ''} to tick or skip with a reason`);
+  if (opt) out.push(`${opt} optional check${opt > 1 ? 's' : ''} to tick, or skip with the "Skip with reason" button on its row`);
   return out;
 }
 

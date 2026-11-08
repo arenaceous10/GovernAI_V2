@@ -192,7 +192,7 @@ function CheckItem({ item, rec, editable, mandatory, onToggle, onSkip, onUnskip 
   const hint = reason ? validReason(reason) : '';
   const save = () => { const e = onSkip({ category: cat, reason, due }); if (e) setErr(e); else { setOpen(false); setReason(''); setCat(''); setDue(''); setErr(''); toast('Check skipped with a reason'); } };
   return (
-    <div className={`check-item ${st}`}>
+    <div className={`check-item ${st}`} data-open-optional={editable && !mandatory && st === 'open' ? '1' : undefined}>
       <div className="check-line">
         {editable && st !== 'skipped'
           ? <input type="checkbox" aria-label={item} checked={st === 'done'} onChange={onToggle} />
@@ -202,7 +202,7 @@ function CheckItem({ item, rec, editable, mandatory, onToggle, onSkip, onUnskip 
           <span className={`ci-tag ${mandatory ? 'must' : ''}`}>{mandatory ? 'Mandatory' : 'Optional'}</span>
           <span className="ci-tag ctl" title={`${c.name} · ${c.family} · ${c.type}`}>{c.id}</span>
         </span>
-        {editable && !mandatory && st === 'open' && !open && <button type="button" className="btn ghost sm" onClick={() => setOpen(true)}>Skip</button>}
+        {editable && !mandatory && st === 'open' && !open && <button type="button" className="btn ghost sm ci-skip-btn" onClick={() => setOpen(true)} aria-label={`Skip with a reason: ${item}`}><SkipForward size={13} /> Skip with reason</button>}
         {editable && st === 'skipped' && <button type="button" className="btn ghost sm" onClick={onUnskip}>Undo skip</button>}
       </div>
       {st === 'skipped' && sk && (
@@ -312,6 +312,14 @@ function StageView({ s, n }) {
                 <Send size={15} /> {n === 7 ? 'Submit periodic review' : 'Submit for review'}
               </button>
               {blockers.length > 0 && <p className="xs mute">{blockers.join('. ')}.</p>}
+              {blockers.some((b) => /optional/.test(b)) && (
+                <button type="button" className="btn ghost sm" style={{ paddingLeft: 0 }} onClick={() => {
+                  const el = document.querySelector('[data-open-optional="1"]');
+                  if (!el) return;
+                  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600);
+                }}>Show the optional checks left</button>
+              )}
             </div>
           )}
         </section>
