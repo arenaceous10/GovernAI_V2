@@ -12,7 +12,7 @@ import { Field, Panel, Pill, TierBadge, fmtDate } from '../components/ui.jsx';
 import { fwName } from '../components/Results.jsx';
 import { toast } from '../components/Extras.jsx';
 import { useStore, CAN } from '../store/store.jsx';
-import RegistryPanel from '../components/Registry.jsx';
+import RegistryPanel, { GenAIPanel, MonitoringPanel } from '../components/Registry.jsx';
 
 import { CARD_FIELDS, cardCompleteness, cardStatus } from '../data/card.js';
 export { CARD_FIELDS, cardCompleteness, cardStatus };
@@ -203,6 +203,8 @@ export default function AICardPage({ id, nav }) {
           </Panel>
 
           <RegistryPanel s={s} />
+          <GenAIPanel s={s} />
+          <MonitoringPanel s={s} />
 
           <Panel title="Responsible AI profile" sub="From the latest assessment">
             <div className="bars">

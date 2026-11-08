@@ -39,7 +39,17 @@ const metricsText = (s) => {
   const fromReg = reg?.metrics ? Object.entries(reg.metrics).map(([k, v]) => `${k} ${Math.round(v * 10000) / 10000} (registry, version ${reg.version})`) : [];
   return list([...own, ...fromReg]);
 };
-const datasetLine = (d) => `${d.name}${d.sourceSystem ? ` from ${d.sourceSystem}` : ''} (${[d.role, d.classification, d.personal ? 'personal data' : 'no personal data', d.owner ? `owner ${d.owner}` : '', d.steward ? `steward ${d.steward}` : '', d.catalogued ? 'catalogued' : 'not catalogued', d.lineage ? 'lineage recorded' : 'no lineage', d.qualityChecked ? 'quality checked' : 'quality not checked'].filter(Boolean).join(', ')})`;
+const evalText = (s) => {
+  const r = s.connector?.genai?.evaluations?.[0];
+  return r ? `GenAI evaluation "${r.name || r.runId}" (${dt(r.at)}): ${Object.entries(r.metrics).map(([k, v]) => `${k} ${Math.round(v * 1000) / 1000}`).join(', ')}` : '';
+};
+const monitorText = (s) => {
+  const m = s.connector?.monitoring;
+  if (!m?.monitor) return '';
+  const d = m.drift;
+  return `Databricks monitor on ${m.table}: ${m.monitor.status}${d ? `; latest window ${dt(d.windowEnd)}, ${d.checked} columns checked, ${d.drifted.length ? `drift in ${d.drifted.map((x) => x.column).join(', ')}` : 'no drift'}` : ''}${m.performance?.metrics ? `; live ${Object.entries(m.performance.metrics).map(([k, v]) => `${k} ${Math.round(v * 1000) / 1000}`).join(', ')}` : ''}`;
+};
+const datasetLine = (d) => `${d.name}${d.sourceSystem ? ` from ${d.sourceSystem}` : ''}${d.uc?.upstream?.length ? `, built from ${d.uc.upstream.join(', ')}` : ''} (${[d.role, d.classification, d.personal ? 'personal data' : 'no personal data', d.owner ? `owner ${d.owner}` : '', d.steward ? `steward ${d.steward}` : '', d.catalogued ? 'catalogued' : 'not catalogued', d.lineage ? 'lineage recorded' : 'no lineage', d.qualityChecked ? 'quality checked' : 'quality not checked'].filter(Boolean).join(', ')})`;
 
 // item(label, text, hint, ref): text '' marks a gap, with a hint on what to add.
 const item = (label, text, hint, ref) => ({ label, text: t(text), hint, ref });
@@ -62,7 +72,7 @@ export function annexIV(s, { client } = {}) {
       item('Data used: sources, provenance and preparation', list([...(s.datasets || []).map(datasetLine), stageEvidence(s, 3)]), 'Register the datasets in "Data and lineage" and complete stage 3.', 'Annex IV 2(d); Art. 10'),
       item('Human oversight measures', list([profileAnswer(s, 'automation') && `Level of automation: ${profileAnswer(s, 'automation')}`, card(s, 'oversight')]), 'Describe who reviews outputs and how they override or stop the system.', 'Annex IV 2(e); Art. 14'),
       item('Planned changes', (s.events || []).filter((e) => e.kind === 'change').map((e) => `${dt(e.at)}: ${e.text}`).join('; '), 'Describe changes planned in advance and how they are controlled.', 'Annex IV 2(f)'),
-      item('Validation and testing', list([stageEvidence(s, 5), metricsText(s) && `Metrics: ${metricsText(s)}`]), 'Complete stage 5 (testing and independent validation) and record the metrics.', 'Annex IV 2(g)'),
+      item('Validation and testing', list([stageEvidence(s, 5), metricsText(s) && `Metrics: ${metricsText(s)}`, evalText(s)]), 'Complete stage 5 (testing and independent validation) and record the metrics.', 'Annex IV 2(g)'),
       item('Cybersecurity measures', '', 'Describe protections against attacks such as data poisoning, adversarial inputs and model theft.', 'Annex IV 2(h); Art. 15'),
     ] },
     { h: '3. Monitoring, functioning and control', items: [
@@ -91,7 +101,7 @@ export function annexIV(s, { client } = {}) {
       item('Declaration', '', 'Attach a copy of the EU declaration of conformity once the conformity assessment is done.', 'Annex IV 8; Art. 47'),
     ] },
     { h: '9. Post-market monitoring', items: [
-      item('Monitoring plan', list([stageEvidence(s, 7), s.nextReview && `Next periodic review: ${dt(s.nextReview)}`]), 'Complete stage 7 (production monitoring) with thresholds and owners.', 'Annex IV 9; Art. 72'),
+      item('Monitoring plan', list([stageEvidence(s, 7), monitorText(s), s.nextReview && `Next periodic review: ${dt(s.nextReview)}`]), 'Complete stage 7 (production monitoring) with thresholds and owners.', 'Annex IV 9; Art. 72'),
       item('Incidents', (s.events || []).filter((e) => e.kind === 'incident').map((e) => `${dt(e.at)}: ${e.text}`).join('; '), '', 'Art. 73'),
     ] },
   ];

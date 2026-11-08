@@ -159,11 +159,28 @@ Permissions are enforced in the database, not only in the app.
 
   Documents are filled from stored data only, never by a language model, and include the client's logo when set.
 
-**Integrations**
-- **Model registry** (AI card): connect MLflow or Databricks Unity Catalog with a read-only token. Versions and run
-  metrics appear on the card; a new version of a product in production opens a change review. The registry is checked
-  when the card opens (if not checked in the last 12 hours), with "Check now", or for every product from Operations.
-  There is no background schedule, because that would need a service-role key.
+**Integrations (Databricks)**
+
+All four use the product's single model-registry connection (address and a sealed read-only token):
+- **Model registry** (AI card): MLflow or Databricks Unity Catalog. Versions, run metrics, description and owner
+  appear on the card ("Fill from registry" fills empty card fields). A new version of a product in production opens a
+  change review. Checked when the card opens (if not checked in the last 12 hours), with "Check now", or for every
+  product from Operations; there is no background schedule because that would need a service-role key.
+- **Evaluations and traces** (AI card): MLflow GenAI evaluation runs (runs whose metrics are aggregates such as
+  `correctness/mean`) and a summary of recent traces (count, errors, last call, median time) from the model's
+  experiment, or an experiment you name. Shown in the Annex IV draft under validation.
+- **Production monitoring** (AI card): a Databricks data profiling monitor (formerly Lakehouse Monitoring) on a table
+  you name, usually the inference table. Monitor status; with a SQL warehouse ID also drifted columns in the latest
+  window (Jensen-Shannon distance > 0.1, population stability index > 0.2 or Kolmogorov-Smirnov p < 0.05) and live
+  performance. New drift is recorded once as an alert and in the audit log and tamper-evident record. Shown in the
+  Annex IV draft under post-market monitoring.
+- **Unity Catalog tables** (Data and lineage tab): owner, description, columns, upstream and downstream tables and
+  monitoring status per table. Lineage comes from `system.access.table_lineage` when a SQL warehouse ID is set,
+  otherwise from Databricks' lineage endpoint, which is not in its public API reference. Use, classification, personal
+  data and steward stay as people set them.
+
+SQL statements run on the client's SQL warehouse (their compute). Table names go in as parameters or quoted
+identifiers, never pasted into SQL text.
 
 **For the governance team**
 - **Operations**:

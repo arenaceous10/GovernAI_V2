@@ -317,8 +317,12 @@ function installApi(context, db) {
     if (['seal', 'test'].includes(body.action) && !['client', 'admin'].includes(u.role)) return send(route, 403, { error: 'Only the client or an administrator can connect a model' });
     if (body.action === 'seal') return send(route, 200, { sealed: `v1.sealed-for-${row.id}` });
     if (body.action === 'test' && !/^https:\/\//.test(body.host || '')) return send(route, 502, { error: 'Only https addresses are allowed' });
+    if (body.action === 'tables') {
+      if (row.data?.connector?.kind !== 'databricks-uc') return send(route, 400, { error: 'Connect the model to Databricks Unity Catalog on the AI card first' });
+      return send(route, 200, { tables: (body.tables || []).map((n) => db.ucTables?.[n] || { name: n, error: `Table ${n} was not found, or the token cannot read it` }), notes: [] });
+    }
     const versions = (db.registry?.versions || []).slice().sort((a, b) => +b.version - +a.version);
-    return send(route, 200, { model: body.model || row.data?.connector?.model, info: db.registry?.info || {}, versions, latest: versions[0]?.version || null });
+    return send(route, 200, { model: body.model || row.data?.connector?.model, info: db.registry?.info || {}, versions, latest: versions[0]?.version || null, genai: db.registry?.genai || null, monitoring: db.registry?.monitoring || null });
   });
   return Promise.all([evidence, connector]);
 }

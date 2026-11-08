@@ -1117,3 +1117,4 @@ h1, h2, h3 { text-wrap: balance; }
 .ss-legend { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--ink-2); }
 .ss-legend li { display: inline-flex; align-items: center; gap: 6px; }
 .ss-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.uc-line { max-width: 520px; margin-top: 2px; }

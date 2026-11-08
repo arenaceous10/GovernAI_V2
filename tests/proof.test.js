@@ -94,3 +94,79 @@ test('reads MLflow and Unity Catalog registries, newest version first, with run 
   const redirect = async () => ({ ok: false, status: 302, text: async () => '' });
   await assert.rejects(readRegistry({ kind: 'mlflow', host: 'https://ml.example.com', model: 'claims' }, { fetchImpl: redirect, resolve }), /redirect/);
 });
+
+import { readGenAI, readMonitoring, readTables } from '../src/lib/server/connector.js';
+const stub = (routes) => {
+  const seen = [];
+  const f = async (url, opts) => {
+    seen.push({ url, body: opts.body ? JSON.parse(opts.body) : null });
+    for (const [re, v] of routes) if (re.test(url)) return typeof v === 'function' ? v(url, opts) : { ok: true, status: 200, text: async () => JSON.stringify(v) };
+    return { ok: false, status: 404, text: async () => '' };
+  };
+  f.seen = seen; return f;
+};
+const sqlResult = (cols, rows) => ({ status: { state: 'SUCCEEDED' }, manifest: { schema: { columns: cols.map((name) => ({ name })) } }, result: { data_array: rows } });
+
+test('reads GenAI evaluation runs and a trace summary from the experiment of the model version', async () => {
+  const f = stub([
+    [/runs\/search/, { runs: [
+      { info: { run_id: 'e1', run_name: 'eval-v2', start_time: 1762500000000 }, data: { metrics: [{ key: 'safety/mean', value: 1 }, { key: 'correctness/mean', value: 0.8 }, { key: 'loss', value: 3 }] } },
+      { info: { run_id: 't1', run_name: 'training' }, data: { metrics: [{ key: 'auc', value: 0.9 }] } }] }],
+    [/\/api\/2\.0\/mlflow\/traces\?/, { traces: [{ timestamp_ms: 1762500000000, status: 'OK', execution_time_ms: 300 }, { timestamp_ms: 1762600000000, status: 'ERROR', execution_time_ms: 900 }] }],
+  ]);
+  const g = await readGenAI({ base: 'https://dbc.example.com', token: 't', versions: [{ version: '2', experimentId: '42' }] }, { fetchImpl: f });
+  assert.equal(g.experimentId, '42');
+  assert.deepEqual(g.evaluations.map((e) => e.runId), ['e1'], 'training runs are not evaluations');
+  assert.deepEqual(g.evaluations[0].metrics, { 'safety/mean': 1, 'correctness/mean': 0.8 });
+  assert.equal(g.traces.count, 2); assert.equal(g.traces.errors, 1); assert.equal(g.traces.last, new Date(1762600000000).toISOString());
+  assert.deepEqual(f.seen.find((x) => /runs\/search/.test(x.url)).body.experiment_ids, ['42']);
+  // a named experiment is looked up by path; a broken trace endpoint does not fail the rest
+  const f2 = stub([[/get-by-name/, { experiment: { experiment_id: '7' } }], [/runs\/search/, { runs: [] }]]);
+  const g2 = await readGenAI({ base: 'https://x', token: 't', experiment: '/Users/a@b.com/bot' }, { fetchImpl: f2 });
+  assert.equal(g2.experimentId, '7'); assert.equal(g2.traces, null); assert.match(g2.notes.join(), /Traces/);
+});
+
+test('reads a data profiling monitor, flags drifted columns and live performance', async () => {
+  const f = stub([
+    [/unity-catalog\/tables\/[^/]+$/, { table_id: 'abc-123' }],
+    [/data-quality\/v1\/monitors\/table\/abc-123/, { data_profiling_config: { status: 'MONITOR_STATUS_ACTIVE', drift_metrics_table_name: 'w.d.inf_drift_metrics', profile_metrics_table_name: 'w.d.inf_profile_metrics' } }],
+    [/sql\/statements/, (url, opts) => {
+      const st = JSON.parse(opts.body).statement;
+      const w = JSON.stringify({ start: '2026-11-05T00:00:00Z', end: '2026-11-06T00:00:00Z' });
+      const body = st.includes('drift') ? sqlResult(['window', 'column_name', 'drift_type', 'js_distance', 'population_stability_index', 'ks_test', 'slice_key'],
+        [[w, 'age', 'CONSECUTIVE', '0.31', '0.4', '{"statistic":0.2,"pvalue":0.001}', null], [w, 'bmi', 'CONSECUTIVE', '0.02', '0.01', '{"statistic":0.01,"pvalue":0.8}', null],
+         [JSON.stringify({ end: '2026-11-04T00:00:00Z' }), 'age', 'CONSECUTIVE', '0.5', null, null, null]])
+        : sqlResult(['window', 'column_name', 'count', 'accuracy_score', 'f1_score', 'slice_key'], [[w, ':table', '1200', '0.81', '{"macro":0.7,"weighted":0.78}', null]]);
+      return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+    }],
+  ]);
+  const m = await readMonitoring({ base: 'https://dbc.example.com', token: 't', table: 'w.d.inf', warehouseId: 'abcdef1234567890' }, { fetchImpl: f });
+  assert.equal(m.monitor.status, 'ACTIVE');
+  assert.equal(m.drift.checked, 2, 'only the latest window');
+  assert.deepEqual(m.drift.drifted.map((d) => d.column), ['age']);
+  assert.equal(m.drift.drifted[0].ksP, 0.001);
+  assert.deepEqual(m.performance.metrics, { accuracy_score: 0.81, f1_score: 0.78 });
+  assert.match(f.seen.find((x) => x.body?.statement?.includes('drift')).body.statement, /FROM `w`\.`d`\.`inf_drift_metrics`/, 'identifiers quoted');
+  // without a warehouse: status only
+  const m2 = await readMonitoring({ base: 'https://x', token: 't', table: 'w.d.inf' }, { fetchImpl: f });
+  assert.equal(m2.drift, null); assert.match(m2.notes.join(), /SQL warehouse/);
+  await assert.rejects(readMonitoring({ base: 'https://x', token: 't', table: 'w.d.inf; DROP TABLE x' }, { fetchImpl: f }), /catalog\.schema\.table/);
+});
+
+test('reads Unity Catalog tables with lineage from the system table, passing names as parameters', async () => {
+  const f = stub([
+    [/unity-catalog\/tables\/w\.d\.applicants$/, { table_id: 't1', owner: 'data@acme', comment: 'Applicants', table_type: 'MANAGED', columns: [{}, {}, {}], updated_at: 1762500000000 }],
+    [/unity-catalog\/tables\/w\.d\.applicants\/monitor/, { status: 'MONITOR_STATUS_ACTIVE' }],
+    [/sql\/statements/, sqlResult(['source_table_full_name', 'target_table_full_name', 'last_seen'], [['w.d.raw', 'w.d.applicants', 'x'], ['w.d.applicants', 'w.d.training', 'x']])],
+  ]);
+  const r = await readTables({ base: 'https://dbc.example.com', token: 't', tables: ['w.d.applicants', 'w.d.missing'], warehouseId: 'abcdef1234567890' }, { fetchImpl: f });
+  const a = r.tables[0];
+  assert.equal(a.owner, 'data@acme'); assert.equal(a.columns, 3);
+  assert.deepEqual(a.upstream, ['w.d.raw']); assert.deepEqual(a.downstream, ['w.d.training']);
+  assert.equal(a.lineageSource, 'system.access.table_lineage'); assert.equal(a.monitor.status, 'ACTIVE');
+  assert.match(r.tables[1].error, /not found/);
+  const q = f.seen.find((x) => /sql\/statements/.test(x.url)).body;
+  assert.doesNotMatch(q.statement, /applicants/, 'table names are parameters, not pasted into SQL');
+  assert.deepEqual(q.parameters.map((p) => p.value), ['w.d.applicants', 'w.d.missing']);
+  await assert.rejects(readTables({ base: 'https://x', token: 't', tables: ["x.y.z' OR 1=1"] }, { fetchImpl: f }), /catalog\.schema\.table/);
+});

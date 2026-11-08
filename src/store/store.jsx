@@ -444,8 +444,28 @@ export function StoreProvider({ children, standalone = null }) {
       // The token is sealed by the server before it is stored here; the browser never keeps it in the clear.
       connectModel: (id, c) => ['client', 'admin'].includes(state.role) && updateSystem(id, (x) => ({
         ...x, connector: { kind: c.kind, host: c.host, model: c.model, tokenSealed: c.tokenSealed || '', connectedAt: nowIso(), connectedBy: state.me?.name || state.role,
-          info: c.result?.info || null, versions: c.result?.versions || [], latest: c.result?.latest || null, seenVersion: c.result?.latest || null, lastSync: c.result ? nowIso() : null, alerts: [] },
+          experiment: c.experiment || '', monitorTable: c.monitorTable || '', warehouseId: c.warehouseId || '', genai: c.result?.genai || null, monitoring: c.result?.monitoring || null, info: c.result?.info || null, versions: c.result?.versions || [], latest: c.result?.latest || null, seenVersion: c.result?.latest || null, lastSync: c.result ? nowIso() : null, alerts: [] },
       }), 'Model registry connected', `${c.kind === 'databricks-uc' ? 'Databricks Unity Catalog' : 'MLflow'}: ${c.model}`),
+      // Where evaluations, traces and monitoring come from: an MLflow experiment, a monitored table and a SQL warehouse.
+      setConnectorConfig: (id, cfg) => ['client', 'admin'].includes(state.role) && updateSystem(id, (x) => (x.connector ? {
+        ...x, connector: { ...x.connector, experiment: String(cfg.experiment || '').trim().slice(0, 300), monitorTable: String(cfg.monitorTable || '').trim().slice(0, 300), warehouseId: String(cfg.warehouseId || '').trim().slice(0, 40) },
+      } : x), 'Model registry settings updated'),
+      // Unity Catalog tables read by the server become (or refresh) datasets. Fields people set in GovernAI
+      // (use, classification, personal data, steward) are kept; owner, catalog, lineage and monitoring come from Databricks.
+      importTables: (id, tables) => CAN.work(state.role) && updateSystem(id, (x) => {
+        const ds = [...(x.datasets || [])];
+        for (const t of tables || []) {
+          if (!t || t.error) continue;
+          const i = ds.findIndex((d) => d.uc?.name === t.name || d.name === t.name);
+          const prev = i >= 0 ? ds[i] : { id: `ds-${Math.random().toString(36).slice(2, 8)}`, role: 'Training', classification: 'Internal', personal: false, steward: '' };
+          const next = { ...prev, name: prev.name || t.name, sourceSystem: 'Databricks Unity Catalog', owner: t.owner || prev.owner || '',
+            catalogued: true, lineage: (t.upstream?.length || 0) + (t.downstream?.length || 0) > 0 || !!prev.lineage, qualityChecked: !!t.monitor || !!prev.qualityChecked,
+            uc: { name: t.name, comment: t.comment, type: t.type, format: t.format, columns: t.columns, createdBy: t.createdBy, updatedAt: t.updatedAt,
+              upstream: t.upstream || [], downstream: t.downstream || [], lineageSource: t.lineageSource, monitor: t.monitor, readAt: nowIso() } };
+          if (i >= 0) ds[i] = next; else ds.push(next);
+        }
+        return { ...x, datasets: ds };
+      }, 'Data assets updated from Unity Catalog', `${(tables || []).filter((t) => !t.error).length} tables`),
       disconnectModel: (id) => ['client', 'admin'].includes(state.role) && updateSystem(id, (x) => (x.connector ? { ...x, connector: undefined } : x), 'Model registry disconnected'),
       // A registry read. A version newer than the last one seen is flagged, and a product in production moves to
       // change review (stage 8) when the person syncing may raise changes; otherwise the alert waits for them.
@@ -454,18 +474,25 @@ export function StoreProvider({ children, standalone = null }) {
         if (!x0?.connector || !result) return null;
         const fresh = result.latest && x0.connector.seenVersion && String(result.latest) !== String(x0.connector.seenVersion)
           && (+result.latest || 0) >= (+x0.connector.seenVersion || 0);
+        // Drift in a new monitoring window is recorded once, as an alert and in the audit log (so also in the record).
+        const dr = result.monitoring?.drift;
+        const driftNew = dr?.drifted?.length > 0 && dr.windowEnd && dr.windowEnd !== x0.connector.monitoring?.drift?.windowEnd
+          && !(x0.connector.alerts || []).some((a) => a.kind === 'drift' && a.windowEnd === dr.windowEnd);
         const canRaise = CAN.raiseEvent(state.role) && x0.stage === 7 && x0.status === 'In production';
         updateSystem(id, (x) => {
           if (!x.connector) return x;
-          const c = { ...x.connector, info: result.info || x.connector.info || null, versions: (result.versions || []).slice(0, 50), latest: result.latest || null, lastSync: nowIso() };
+          let c = { ...x.connector, info: result.info || x.connector.info || null, versions: (result.versions || []).slice(0, 50), latest: result.latest || null, lastSync: nowIso(),
+            genai: result.genai || null, monitoring: result.monitoring || null };
+          if (driftNew) c = { ...c, alerts: [...(c.alerts || []), { kind: 'drift', at: nowIso(), windowEnd: dr.windowEnd, columns: dr.drifted.map((d) => d.column).slice(0, 10) }].slice(-20) };
           if (!fresh) return { ...x, connector: { ...c, seenVersion: c.seenVersion || result.latest || null } };
           const alert = { at: nowIso(), version: String(result.latest), from: String(x.connector.seenVersion), raised: canRaise };
           const y = { ...x, updatedAt: nowIso(), connector: { ...c, seenVersion: String(result.latest), alerts: [...(c.alerts || []), alert].slice(-20) } };
           if (!canRaise) return y;
           const text = `New model version ${result.latest} registered in ${c.model} (was ${x.connector.seenVersion}). Review the change before it is used.`;
           return { ...y, stage: 8, stages: { ...y.stages, 8: newStage() }, events: [...(y.events || []), { at: nowIso(), kind: 'change', text, auto: true }] };
-        }, fresh ? (canRaise ? 'Change raised' : 'New model version found') : null, fresh ? `Version ${result.latest} in ${x0.connector.model}` : undefined);
-        return fresh ? (canRaise ? 'raised' : 'found') : 'same';
+        }, fresh ? (canRaise ? 'Change raised' : 'New model version found') : driftNew ? 'Drift detected' : null,
+        fresh ? `Version ${result.latest} in ${x0.connector.model}` : driftNew ? `${dr.drifted.length} column${dr.drifted.length === 1 ? '' : 's'} drifted in ${result.monitoring.table}: ${dr.drifted.map((d) => d.column).slice(0, 5).join(', ')}` : undefined);
+        return fresh ? (canRaise ? 'raised' : 'found') : driftNew ? 'drift' : 'same';
       },
       // New action, by the client or as a requirement from the governance team (e.g. on a control gap).
       addAction: (id, a) => {

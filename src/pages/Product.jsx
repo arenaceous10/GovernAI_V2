@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, BookMarked, Check, CheckCircle2, ChevronDown, Circle, SkipForward, Plus, Presentation, FileText, CornerDownLeft, Download, ExternalLink, Gavel, Link2, Loader2, Lock, Paperclip, RefreshCw, Send, ShieldCheck, X } from 'lucide-react';
+import { ArrowLeft, BookMarked, Check, CheckCircle2, ChevronDown, Circle, SkipForward, Plus, Presentation, FileText, CornerDownLeft, Database, Download, ExternalLink, Gavel, Link2, Loader2, Lock, Paperclip, RefreshCw, Send, ShieldCheck, X } from 'lucide-react';
 import { uploadEvidence, evidenceUrl, removeEvidence, hasFile, isLink, fmtSize } from '../lib/files.js';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { TIERS, DOMAINS, SOURCING, PRINCIPLES, selectionLabel, systemTypeLabel } from '../data/frameworks.js';
@@ -19,6 +19,8 @@ import DataAssets, { catalogCoverage } from '../components/DataAssets.jsx';
 import LineageGraph from '../components/LineageGraph.jsx';
 import { useStore, stageBlockers, waitingOn, newStage, CAN } from '../store/store.jsx';
 import { RecordTab } from '../components/Proof.jsx';
+import { callApi } from '../lib/api.js';
+import { cloud } from '../lib/cloud.js';
 
 const label = (list, id) => list.find((x) => x.id === id)?.label || id || '—';
 
@@ -546,6 +548,40 @@ function Actions({ s }) {
   );
 }
 
+// Pull dataset owner, description, columns, lineage and monitoring from Unity Catalog through the product's
+// model-registry connection (Databricks Unity Catalog), instead of typing them in.
+function UnityImport({ s }) {
+  const { role, importTables } = useStore();
+  const ucd = (s.datasets || []).filter((d) => d.uc?.name).map((d) => d.uc.name);
+  const [names, setNames] = useState(ucd.join('\n'));
+  const [busy, setBusy] = useState(false);
+  const [errs, setErrs] = useState([]);
+  if (!cloud || s.connector?.kind !== 'databricks-uc' || !CAN.work(role)) return null;
+  const run = async () => {
+    const list = names.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+    if (!list.length) return;
+    setBusy(true); setErrs([]);
+    try {
+      const res = await callApi('/api/connector', { action: 'tables', productId: s.id, tables: list });
+      const ok = res.tables.filter((t) => !t.error);
+      setErrs([...res.tables.filter((t) => t.error).map((t) => `${t.name}: ${t.error}`), ...(res.notes || [])]);
+      if (ok.length) { importTables(s.id, ok); toast(`${ok.length} table${ok.length === 1 ? '' : 's'} read from Unity Catalog`); }
+    } catch (e) { setErrs([e.message]); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Panel title="Import from Unity Catalog" sub={`Owner, description, columns, lineage and monitoring for each table, read from ${s.connector.host.replace(/^https:\/\//, '')}. Use, classification, personal data and steward stay as you set them.`}>
+      <div className="row" style={{ gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <label className="field" style={{ flex: 1, minWidth: 260 }}><span>Tables (catalog.schema.table, one per line)</span>
+          <textarea className="input" rows={Math.min(5, Math.max(2, names.split('\n').length))} value={names} onChange={(e) => setNames(e.target.value)} placeholder="workspace.default.applicants" /></label>
+        <button className="btn primary" onClick={run} disabled={busy || !names.trim()}>{busy ? <Loader2 size={15} className="spin" /> : <Database size={15} />} {ucd.length ? 'Refresh from Unity Catalog' : 'Import tables'}</button>
+      </div>
+      {!s.connector.warehouseId && <p className="xs mute" style={{ marginTop: 6 }}>Lineage comes from Databricks' lineage system table when a SQL warehouse ID is set on the AI card; without one, GovernAI tries Databricks' lineage endpoint, which is not part of its public API.</p>}
+      {errs.length > 0 && <ul className="xs bad-text" style={{ margin: '8px 0 0', paddingLeft: 16 }}>{errs.map((e) => <li key={e}>{e}</li>)}</ul>}
+    </Panel>
+  );
+}
+
 function DataTab({ s }) {
   const { saveData, role } = useStore();
   const [edit, setEdit] = useState(false);
@@ -553,6 +589,7 @@ function DataTab({ s }) {
   const cov = catalogCoverage(s.datasets);
   return (
     <div className="stack">
+      {!edit && <UnityImport s={s} />}
       <Panel title="Lineage" right={!edit && CAN.work(role) && <button className="btn sm" onClick={() => { setD(s.datasets); setO(s.outputs); setEdit(true); }}>Edit data assets</button>}>
         <LineageGraph name={s.name} datasets={edit ? d : s.datasets} outputs={edit ? o : s.outputs} />
       </Panel>
@@ -568,7 +605,8 @@ function DataTab({ s }) {
               <tbody>
                 {s.datasets.map((x) => (
                   <tr key={x.id}>
-                    <td><b style={{ fontWeight: 500 }}>{x.name}</b><div className="xs mute">{x.role}</div></td>
+                    <td><b style={{ fontWeight: 500 }}>{x.name}</b><div className="xs mute">{x.role}</div>
+                      {x.uc && <div className="xs mute uc-line">{x.uc.comment ? <>{x.uc.comment}<br /></> : null}{x.uc.columns} columns{x.uc.upstream?.length ? ` · from ${x.uc.upstream.join(', ')}` : ''}{x.uc.downstream?.length ? ` · feeds ${x.uc.downstream.join(', ')}` : ''}{x.uc.monitor ? ` · monitor ${x.uc.monitor.status.toLowerCase()}` : ''} · read {fmtDate(x.uc.readAt)}</div>}</td>
                     <td className="small">{x.sourceSystem}</td>
                     <td><span className="tag">{x.classification}</span></td>
                     <td className="small">{x.owner || '—'}</td><td className="small">{x.steward || <span className="tone-bad">None</span>}</td>

@@ -125,6 +125,45 @@ const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwA
     assert(db.tables.v2_ledger.some((r) => r.chain === 'sys-5' && r.kind === 'stage' && r.body.includes('"to":8')), 'stage move recorded');
     await p.goto(URL + '#product--sys-5'); await W(p, 800);
     assert((await body(p)).includes('Change management'), 'product now in change management');
+
+    // 6b. evaluations, traces and production monitoring; drift is recorded once
+    db.registry.genai = { experimentId: '42', evaluations: [{ runId: 'e1', name: 'eval-v4', at: '2026-11-07T10:00:00Z', metrics: { 'safety/mean': 1, 'correctness/mean': 0.82 } }],
+      traces: { count: 37, more: false, errors: 2, last: '2026-11-08T09:00:00Z', latencyMs: 640 }, notes: [] };
+    db.registry.monitoring = { table: 'main.risk.claims_inference', monitor: { status: 'ACTIVE', driftTable: 'x', profileTable: 'y' },
+      drift: { windowEnd: '2026-11-08T00:00:00Z', checked: 6, drifted: [{ column: 'age', js: 0.31, psi: 0.42, ksP: 0.001, type: 'CONSECUTIVE' }] },
+      performance: { windowEnd: '2026-11-08T00:00:00Z', rows: 1200, metrics: { accuracy_score: 0.81 } }, notes: [] };
+    await p.goto(URL + '#card--sys-5'); await W(p, 1000);
+    await p.getByRole('button', { name: /Evaluations and monitoring/ }).click(); await W(p);
+    await p.getByLabel('Monitored table').fill('main.risk.claims_inference');
+    await p.getByLabel('SQL warehouse ID').fill('abcdef1234567890');
+    await p.getByRole('button', { name: 'Save and check' }).click(); await W(p, 1500);
+    t = await body(p);
+    assert(t.includes('Evaluations and traces') && t.includes('eval-v4') && t.includes('safety: 100%') && t.includes('2 with errors'), 'evaluations and traces shown');
+    assert(t.includes('Production monitoring') && t.includes('1 column drifted') && t.includes('age (JS 0.31, PSI 0.42, KS p 0.001)') && t.includes('accuracy score'), 'monitoring shown');
+    assert(row('sys-5').data.connector.alerts.some((a) => a.kind === 'drift'), 'drift alert stored');
+    assert(db.tables.v2_audit.some((a) => a.action === 'Drift detected' && a.target === 'sys-5'), 'drift in the audit log');
+    assert(db.tables.v2_ledger.some((r) => r.chain === 'sys-5' && r.kind === 'audit' && r.body.includes('Drift detected')), 'drift in the record');
+    const auditN = db.tables.v2_audit.filter((a) => a.action === 'Drift detected').length;
+    await p.getByRole('button', { name: /Check now/ }).click(); await W(p, 1200);
+    assert(db.tables.v2_audit.filter((a) => a.action === 'Drift detected').length === auditN, 'same window not recorded twice');
+
+    // 6c. Unity Catalog tables into the Data tab, with lineage and monitoring; settings people set are kept
+    db.ucTables = { 'main.risk.applicants': { name: 'main.risk.applicants', owner: 'data-office@meridian.example', comment: 'Claim applicants', type: 'MANAGED', columns: 14,
+      upstream: ['main.raw.applications'], downstream: ['main.risk.training'], lineageSource: 'system.access.table_lineage', monitor: { status: 'ACTIVE' } } };
+    await p.goto(URL + '#product--sys-5'); await W(p, 800);
+    await p.getByRole('tab', { name: /Data/ }).click(); await W(p, 600);
+    await p.getByLabel(/Tables \(catalog/).fill('main.risk.applicants\nmain.risk.nothing');
+    await p.getByRole('button', { name: /Import tables/ }).click(); await W(p, 1200);
+    t = await body(p);
+    assert(t.includes('main.risk.nothing: Table main.risk.nothing was not found'), 'missing table reported');
+    const ds = row('sys-5').data.datasets.find((d) => d.uc?.name === 'main.risk.applicants');
+    assert(ds && ds.owner === 'data-office@meridian.example' && ds.catalogued && ds.lineage && ds.qualityChecked && ds.sourceSystem === 'Databricks Unity Catalog', 'dataset imported');
+    assert(t.includes('from main.raw.applications') && t.includes('feeds main.risk.training'), 'lineage shown');
+    // a person's classification survives a refresh
+    ds.classification = 'Confidential';
+    await p.reload(); await W(p, 1000); await p.getByRole('tab', { name: /Data/ }).click(); await W(p, 600);
+    await p.getByRole('button', { name: /Refresh from Unity Catalog/ }).click(); await W(p, 1200);
+    assert(row('sys-5').data.datasets.find((d) => d.uc?.name === 'main.risk.applicants').classification === 'Confidential', 'classification kept');
     await signOut(p);
 
     // 7. operations: overdue review timers, workload and time to value; overdue reviews notify reviewers
