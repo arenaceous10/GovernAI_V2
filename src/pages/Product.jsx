@@ -7,7 +7,7 @@ import { geoName } from '../data/countries.js';
 import { STAGES, stageOf, requiredApprovals, ROLES, STAGE_STATUS, GATE_STAGES, ON_DEMAND, phaseOf } from '../data/lifecycle.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
 import { sectionOf, sectionOrder } from '../engine/engine.js';
-import { controlFor, itemState, isMandatory, validReason, controlStatus, SKIP_REASONS, MIN_REASON, COMPASS, COMPASS_IDS } from '../data/controls.js';
+import { controlFor, itemState, isMandatory, validReason, controlStatus, stageCompletion, SKIP_REASONS, MIN_REASON, COMPASS, COMPASS_IDS } from '../data/controls.js';
 import { downloadReport } from '../engine/report.js';
 import { downloadDeck } from '../engine/deck.js';
 import { annexIV, dpdpPack, downloadPack } from '../engine/docpack.js';
@@ -229,6 +229,37 @@ function CheckItem({ item, rec, editable, mandatory, onToggle, onSkip, onUnskip 
   );
 }
 
+// Completion scale for one stage: one bar from 0 to 100%, split by mandatory checks, optional checks (ticked or
+// skipped) and evidence, with what is still needed before it can be submitted.
+function StageScale({ st, rec, tier, rules, blockers, working }) {
+  const c = stageCompletion(st, rec, tier, rules);
+  const w = (x) => `${c.total ? (x / c.total) * 100 : 0}%`;
+  const ready = working && blockers.length === 0;
+  const parts = [
+    { k: 'mand', label: 'Mandatory checks', n: c.mandatory.done, of: c.mandatory.total },
+    { k: 'opt', label: 'Optional checks ticked', n: c.optional.done, of: c.optional.total },
+    { k: 'skip', label: 'Optional checks skipped with a reason', n: c.optional.skipped, of: null },
+    { k: 'ev', label: 'Evidence attached', n: c.evidence.done, of: c.evidence.total },
+  ];
+  return (
+    <section className="panel stage-scale" aria-label={`Stage completion ${c.pct} percent`}>
+      <div className="ss-head">
+        <div><span className="ss-pct num">{c.pct}%</span> <span className="small mute">of this stage complete · {c.done} of {c.total} items</span></div>
+        {working && <span className={`pill ${ready ? 'pill-good' : 'pill-mute'}`}>{ready ? 'Ready to submit' : 'Not ready to submit'}</span>}
+      </div>
+      <div className="ss-bar" role="img" aria-label={parts.map((p) => `${p.label}: ${p.n}${p.of != null ? ` of ${p.of}` : ''}`).join('; ')}>
+        {parts.map((p) => p.n > 0 && <span key={p.k} className={`ss-${p.k}`} style={{ width: w(p.n) }} />)}
+      </div>
+      <div className="ss-ticks xs mute num" aria-hidden><span>0</span><span>25</span><span>50</span><span>75</span><span>100%</span></div>
+      <ul className="ss-legend xs">
+        {parts.filter((p) => p.of !== 0 && !(p.k === 'skip' && p.n === 0)).map((p) => (
+          <li key={p.k}><i className={`ss-${p.k}`} aria-hidden />{p.label}: <b className="num">{p.n}{p.of != null ? ` of ${p.of}` : ''}</b></li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function ChecklistView({ st, rec, editable, tier, rules, onToggle, onAll, onSkip, onUnskip }) {
   const done = st.checklist.filter((i) => rec.checklist[i]).length;
   const skipped = st.checklist.filter((i) => itemState(rec, i) === 'skipped').length;
@@ -286,6 +317,8 @@ function StageView({ s, n }) {
         {rec.conditions && <div className="callout"><b>Conditions:</b> {rec.conditions}</div>}
         {isCurrent && rec.status === 'submitted' && role === 'client' && <div className="callout"><b>With the governance team.</b> Submitted {fmtDate(rec.submittedAt)}. You'll see their decision here.</div>}
         {working && !CAN.work(role) && <div className="callout small"><b>The client is working on this stage.</b> You can review it once they submit.</div>}
+
+        {(isCurrent || rec.status === 'approved') && <StageScale st={st} rec={rec} tier={tier} rules={rules} blockers={blockers} working={working} />}
 
         <ChecklistView st={st} rec={rec} editable={canEdit} tier={tier} rules={rules} onToggle={(item) => toggleCheck(s.id, n, item)} onAll={() => checkAll(s.id, n, st.checklist)}
           onSkip={(item, v) => skipCheck(s.id, n, item, v)} onUnskip={(item) => unskipCheck(s.id, n, item)} />

@@ -1104,3 +1104,16 @@ h1, h2, h3 { text-wrap: balance; }
 @keyframes ci-flash { 0%, 40% { background: var(--warn-bg); box-shadow: 0 0 0 2px var(--warn); } 100% { background: transparent; box-shadow: none; } }
 .ci-skip-btn { white-space: nowrap; }
 .vh-h { font-size: 0.8rem; font-weight: 600; color: var(--ink-2); margin: 0 0 4px; }
+
+/* stage completion scale */
+.stage-scale { padding: 16px 20px; }
+.ss-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.ss-pct { font-size: 1.5rem; font-weight: 600; color: var(--ink); }
+.ss-bar { display: flex; height: 12px; margin-top: 10px; border-radius: 6px; background: var(--line-2); overflow: hidden; }
+.ss-bar span { height: 100%; }
+.ss-mand { background: #1E3A8A; } .ss-opt { background: #3B82F6; } .ss-ev { background: #1F7A4D; }
+.ss-skip { background: repeating-linear-gradient(135deg, #B7791F 0 4px, #E9C77F 4px 8px); }
+.ss-ticks { display: flex; justify-content: space-between; margin-top: 3px; }
+.ss-legend { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--ink-2); }
+.ss-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.ss-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }

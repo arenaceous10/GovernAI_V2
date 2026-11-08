@@ -1,5 +1,6 @@
 import { Check, CornerDownLeft, Hourglass } from 'lucide-react';
 import { STAGES, PHASES, ON_DEMAND, STAGE_STATUS } from '../data/lifecycle.js';
+import { stagePct } from '../data/controls.js';
 
 // State of stage n for a product: done, current (with its status), upcoming, on-demand or skipped.
 export function stageState(s, n) {
@@ -37,7 +38,7 @@ export function LifecycleRail({ s, viewing, onPick }) {
                     <button type="button" onClick={() => onPick?.(n)} aria-current={st.kind === 'current' ? 'step' : undefined} aria-label={`Stage ${n}: ${meta.name}`} title={meta.name}>
                       <span className="rs-dot">{st.kind === 'done' ? <Check size={14} strokeWidth={2.5} /> : Icon ? <Icon size={13} /> : n}</span>
                       <span className="rs-name">{meta.short}</span>
-                      {st.kind === 'current' && <span className="rs-sub">{SUB[st.status]}</span>}
+                      {st.kind === 'current' && <span className="rs-sub">{SUB[st.status]}{['open', 'returned'].includes(st.status) ? ` · ${stagePct(meta, s.stages?.[n])}%` : ''}</span>}
                       {st.kind === 'ondemand' && <span className="rs-sub mute">If needed</span>}
                     </button>
                   </li>
