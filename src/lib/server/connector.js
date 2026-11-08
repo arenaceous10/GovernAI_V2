@@ -73,7 +73,9 @@ export async function readRegistry({ kind, host, model, token }, { fetchImpl = f
   if (!KINDS[kind]) throw new Error('Choose MLflow or Databricks Unity Catalog');
   const name = String(model || '').trim();
   if (!name || name.length > 200 || /[\s'"\\]/.test(name)) throw new Error('Enter the registered model name exactly as it appears in the registry');
-  const base = await checkHost(host, { allowLocal, resolve });
+  const checked = await checkHost(host, { allowLocal, resolve });
+  // A Databricks workspace answers at its root, so a pasted page address (path, ?o=...) is trimmed to the origin.
+  const base = kind === 'databricks-uc' ? new URL(checked).origin : checked;
   let versions;
   if (kind === 'mlflow') {
     const j = await getJson(fetchImpl, `${base}/api/2.0/mlflow/model-versions/search?max_results=50&filter=${encodeURIComponent(`name='${name}'`)}`, token);

@@ -86,7 +86,8 @@ test('reads MLflow and Unity Catalog registries, newest version first, with run 
   const ml = await readRegistry({ kind: 'mlflow', host: 'https://ml.example.com', model: 'claims', token: 'tok' }, { fetchImpl, resolve });
   assert.equal(ml.latest, '10'); assert.equal(ml.versions[1].stage, 'Production'); assert.deepEqual(ml.versions[0].metrics, { auc: 0.91 });
   assert.ok(seen.every((s) => s.auth === 'Bearer tok'));
-  const uc = await readRegistry({ kind: 'databricks-uc', host: 'https://dbc.example.com', model: 'main.risk.claims', token: 't' }, { fetchImpl, resolve });
+  const uc = await readRegistry({ kind: 'databricks-uc', host: 'https://dbc.example.com/browse/catalogs?o=123', model: 'main.risk.claims', token: 't' }, { fetchImpl, resolve });
+  assert.ok(seen.some((x) => x.url.startsWith('https://dbc.example.com/api/2.1/unity-catalog/')), 'pasted page address trimmed to the workspace');
   assert.equal(uc.latest, '3'); assert.deepEqual(uc.versions[0].aliases, ['champion']); assert.equal(uc.versions[0].description, 'retrained');
   await assert.rejects(readRegistry({ kind: 'databricks-uc', host: 'https://dbc.example.com', model: 'claims', token: 't' }, { fetchImpl, resolve }), /catalog\.schema\.model/);
   await assert.rejects(readRegistry({ kind: 'mlflow', host: 'https://ml.example.com', model: "x' or name='y", token: 't' }, { fetchImpl, resolve }), /exactly/);
