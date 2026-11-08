@@ -182,7 +182,14 @@ async function sql(fetchImpl, base, token, warehouseId, statement, parameters = 
     timeout: 30000,
     body: { warehouse_id: warehouseId, statement, parameters, wait_timeout: '25s', on_wait_timeout: 'CANCEL', format: 'JSON_ARRAY', disposition: 'INLINE', row_limit: 500 },
   });
-  if (j.status?.state !== 'SUCCEEDED') throw new Error(j.status?.error?.message ? `SQL: ${String(j.status.error.message).slice(0, 160)}` : `SQL did not finish (${j.status?.state || 'unknown'})`);
+  if (j.status?.state !== 'SUCCEEDED') {
+    const msg = String(j.status?.error?.message || '');
+    // Name the table and the grant that fixes a missing privilege, instead of a cut-off Databricks message.
+    const perm = msg.match(/INSUFFICIENT_PERMISSIONS[\s\S]*?Principal '([^']+)' does not have (\w+) on (?:Table|View) '([^']+)'/);
+    if (perm) throw new Error(`${perm[1]} has no ${perm[2]} on ${perm[3]}. Its owner can run: GRANT ${perm[2]} ON TABLE ${perm[3]} TO \`${perm[1]}\``);
+    if (/TABLE_OR_VIEW_NOT_FOUND/.test(msg)) throw new Error('The metrics table does not exist yet: wait for the monitor\'s first refresh to finish');
+    throw new Error(msg ? `SQL: ${msg.slice(0, 300)}` : `SQL did not finish (${j.status?.state || 'unknown'})`);
+  }
   const cols = (j.manifest?.schema?.columns || []).map((c) => c.name);
   return (j.result?.data_array || []).map((row) => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
 }

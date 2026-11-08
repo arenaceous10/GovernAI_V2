@@ -170,3 +170,13 @@ test('reads Unity Catalog tables with lineage from the system table, passing nam
   assert.deepEqual(q.parameters.map((p) => p.value), ['w.d.applicants', 'w.d.missing']);
   await assert.rejects(readTables({ base: 'https://x', token: 't', tables: ["x.y.z' OR 1=1"] }, { fetchImpl: f }), /catalog\.schema\.table/);
 });
+
+test('a missing table privilege is explained with the grant that fixes it', async () => {
+  const f = stub([
+    [/unity-catalog\/tables\/[^/]+$/, { table_id: 'x' }],
+    [/data-quality/, { data_profiling_config: { status: 'MONITOR_STATUS_ACTIVE', drift_metrics_table_name: 'w.d.inf_drift_metrics' } }],
+    [/sql\/statements/, { status: { state: 'FAILED', error: { message: "[INSUFFICIENT_PERMISSIONS] Insufficient privileges: Principal 'a@b.com' does not have SELECT on Table 'w.d.inf_drift_metrics'. SQLSTATE: 42501" } } }],
+  ]);
+  const m = await readMonitoring({ base: 'https://x', token: 't', table: 'w.d.inf', warehouseId: 'abcdef1234567890' }, { fetchImpl: f });
+  assert.match(m.notes.join(), /a@b\.com has no SELECT on w\.d\.inf_drift_metrics\. Its owner can run: GRANT SELECT ON TABLE w\.d\.inf_drift_metrics TO `a@b\.com`/);
+});
