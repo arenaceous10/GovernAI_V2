@@ -318,7 +318,7 @@ function installApi(context, db) {
     if (body.action === 'seal') return send(route, 200, { sealed: `v1.sealed-for-${row.id}` });
     if (body.action === 'test' && !/^https:\/\//.test(body.host || '')) return send(route, 502, { error: 'Only https addresses are allowed' });
     const versions = (db.registry?.versions || []).slice().sort((a, b) => +b.version - +a.version);
-    return send(route, 200, { model: body.model || row.data?.connector?.model, versions, latest: versions[0]?.version || null });
+    return send(route, 200, { model: body.model || row.data?.connector?.model, info: db.registry?.info || {}, versions, latest: versions[0]?.version || null });
   });
   return Promise.all([evidence, connector]);
 }

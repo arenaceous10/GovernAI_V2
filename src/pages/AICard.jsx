@@ -3,7 +3,7 @@
 // related assets, certification and version history. Facts the app already holds (risk, stage,
 // datasets, approvals) fill in automatically; the client writes the rest.
 import { useMemo, useState } from 'react';
-import { ArrowLeft, BadgeCheck, BookMarked, Boxes, Database, Pencil, Plus, Search, Tag, Trash2, Users } from 'lucide-react';
+import { ArrowLeft, BadgeCheck, BookMarked, Boxes, Database, DownloadCloud, Pencil, Plus, Search, Tag, Trash2, Users } from 'lucide-react';
 import { DOMAINS, SOURCING, TIERS, PRINCIPLES, PRINCIPLE_IDS, selectionLabel, systemTypeLabel } from '../data/frameworks.js';
 import { geoName } from '../data/countries.js';
 import { STAGES, ROLES } from '../data/lifecycle.js';
@@ -107,6 +107,22 @@ export default function AICardPage({ id, nav }) {
   const versions = [...(c.versions || [])].reverse();
   const start = () => { setD({ ...c, metrics: (c.metrics || []).map((m) => ({ ...m })), tags: [...(c.tags || [])] }); setEdit(true); };
   const save = () => { saveCard(s.id, d); setEdit(false); toast('AI card saved'); };
+  // Fills only empty fields, from the registry: description, model name, the version in use and its owner.
+  const fillFromRegistry = () => {
+    const con = s.connector; const rv = registryVersion(con); const info = con?.info || {};
+    const kind = con?.kind === 'databricks-uc' ? 'Databricks Unity Catalog' : 'MLflow';
+    const offer = {
+      summary: info.description,
+      modelName: con?.model ? `${con.model} (${kind})` : '',
+      modelVersion: rv ? `${rv.version}${rv.aliases?.length ? ` (${rv.aliases.join(', ')})` : ''}` : '',
+      modelOwner: info.owner,
+    };
+    const patch = Object.fromEntries(Object.entries(offer).filter(([k, v]) => v && !String(c[k] || '').trim()));
+    const names = Object.keys(patch).map((k) => CARD_FIELDS.find((x) => x.k === k)?.label.toLowerCase());
+    if (!names.length) { toast('Nothing to fill: those fields already have content, or the registry has no value for them', 'warn'); return; }
+    saveCard(s.id, { ...c, ...patch });
+    toast(`Filled from the registry: ${names.join(', ')}`);
+  };
   const f = (k) => (edit ? d[k] : c[k]);
 
   return (
@@ -128,6 +144,7 @@ export default function AICardPage({ id, nav }) {
         </div>
         <div className="row" style={{ alignSelf: 'flex-start' }}>
           <button className="btn" onClick={() => nav(`/product/${s.id}`)}><Boxes size={15} /> Open lifecycle</button>
+          {canEdit && !edit && s.connector?.versions?.length > 0 && <button className="btn" onClick={fillFromRegistry} title="Fill empty card fields from the connected model registry"><DownloadCloud size={15} /> Fill from registry</button>}
           {canEdit && !edit && <button className="btn primary" onClick={start}><Pencil size={15} /> Edit card</button>}
           {edit && <><button className="btn" onClick={() => setEdit(false)}>Cancel</button><button className="btn primary" onClick={save}>Save card</button></>}
         </div>
@@ -203,13 +220,26 @@ export default function AICardPage({ id, nav }) {
             <ul className="list-plain small" style={{ marginTop: 10 }}>{r.reasons.slice(0, 4).map((x) => <li key={x}>{x}</li>)}</ul>
           </Panel>
 
-          <Panel title="Version history">
-            {versions.length === 0 ? <p className="small mute">The card has not been edited yet.</p> : versions.map((v, i) => (
+          <Panel title="Version history" sub={s.connector?.versions?.length ? 'Edits to this card, and the model versions registered in the connected registry.' : undefined}>
+            <h3 className="vh-h">Card edits</h3>
+            {versions.length === 0 ? <p className="small mute">The card has not been edited yet.{s.connector?.versions?.length && canEdit ? ' Use "Fill from registry" to start it from the registry.' : ''}</p> : versions.map((v, i) => (
               <div key={i} className="small" style={{ padding: '7px 0', borderTop: i ? '1px solid var(--line-2)' : 0 }}>
                 <b style={{ fontWeight: 500 }}>Version {v.version}</b> <span className="mute num">{fmtDate(v.at)}</span> <span className="mute">by {v.byName || ROLES[v.by]?.name || v.by}</span>
                 {v.changed?.length ? <div className="xs mute">Changed: {v.changed.map((k) => CARD_FIELDS.find((x) => x.k === k)?.label.toLowerCase() || k).join(', ')}</div> : null}
               </div>
             ))}
+            {s.connector?.versions?.length > 0 && (
+              <>
+                <h3 className="vh-h" style={{ marginTop: 14 }}>Model versions ({s.connector.kind === 'databricks-uc' ? 'Databricks Unity Catalog' : 'MLflow'})</h3>
+                {s.connector.versions.slice(0, 12).map((v, i) => (
+                  <div key={v.version} className="small" style={{ padding: '7px 0', borderTop: i ? '1px solid var(--line-2)' : 0 }}>
+                    <b style={{ fontWeight: 500 }}>Model version {v.version}</b> <span className="mute num">{fmtDate(v.createdAt)}</span>
+                    {v.aliases?.length ? <> <Pill tone="ok">{v.aliases.join(', ')}</Pill></> : null}
+                    {v.description ? <div className="xs mute">{v.description}</div> : null}
+                  </div>
+                ))}
+              </>
+            )}
           </Panel>
         </div>
 

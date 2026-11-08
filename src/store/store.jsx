@@ -444,7 +444,7 @@ export function StoreProvider({ children, standalone = null }) {
       // The token is sealed by the server before it is stored here; the browser never keeps it in the clear.
       connectModel: (id, c) => ['client', 'admin'].includes(state.role) && updateSystem(id, (x) => ({
         ...x, connector: { kind: c.kind, host: c.host, model: c.model, tokenSealed: c.tokenSealed || '', connectedAt: nowIso(), connectedBy: state.me?.name || state.role,
-          versions: c.result?.versions || [], latest: c.result?.latest || null, seenVersion: c.result?.latest || null, lastSync: c.result ? nowIso() : null, alerts: [] },
+          info: c.result?.info || null, versions: c.result?.versions || [], latest: c.result?.latest || null, seenVersion: c.result?.latest || null, lastSync: c.result ? nowIso() : null, alerts: [] },
       }), 'Model registry connected', `${c.kind === 'databricks-uc' ? 'Databricks Unity Catalog' : 'MLflow'}: ${c.model}`),
       disconnectModel: (id) => ['client', 'admin'].includes(state.role) && updateSystem(id, (x) => (x.connector ? { ...x, connector: undefined } : x), 'Model registry disconnected'),
       // A registry read. A version newer than the last one seen is flagged, and a product in production moves to
@@ -457,7 +457,7 @@ export function StoreProvider({ children, standalone = null }) {
         const canRaise = CAN.raiseEvent(state.role) && x0.stage === 7 && x0.status === 'In production';
         updateSystem(id, (x) => {
           if (!x.connector) return x;
-          const c = { ...x.connector, versions: (result.versions || []).slice(0, 50), latest: result.latest || null, lastSync: nowIso() };
+          const c = { ...x.connector, info: result.info || x.connector.info || null, versions: (result.versions || []).slice(0, 50), latest: result.latest || null, lastSync: nowIso() };
           if (!fresh) return { ...x, connector: { ...c, seenVersion: c.seenVersion || result.latest || null } };
           const alert = { at: nowIso(), version: String(result.latest), from: String(x.connector.seenVersion), raised: canRaise };
           const y = { ...x, updatedAt: nowIso(), connector: { ...c, seenVersion: String(result.latest), alerts: [...(c.alerts || []), alert].slice(-20) } };

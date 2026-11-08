@@ -79,7 +79,7 @@ test('reads MLflow and Unity Catalog registries, newest version first, with run 
     const json = (v) => ({ ok: true, status: 200, text: async () => JSON.stringify(v) });
     if (url.includes('/mlflow/model-versions/search')) return json({ model_versions: [{ version: '2', creation_timestamp: 1762400000000, current_stage: 'Production', run_id: 'r2' }, { version: '10', creation_timestamp: 1762500000000, run_id: 'r10' }] });
     if (url.includes('/unity-catalog/models/main.risk.claims/versions')) return json({ model_versions: [{ version: 3, created_at: 1762500000000, run_id: 'r3', comment: 'retrained' }] });
-    if (url.includes('/unity-catalog/models/main.risk.claims?')) return json({ aliases: [{ alias_name: 'champion', version_num: 3 }] });
+    if (url.includes('/unity-catalog/models/main.risk.claims?')) return json({ comment: 'Claims model', owner: 'ml-team', aliases: [{ alias_name: 'champion', version_num: 3 }] });
     if (url.includes('/runs/get')) return json({ run: { data: { metrics: [{ key: 'auc', value: 0.91 }, { key: 'bad', value: 'x' }] } } });
     return { ok: false, status: 404, text: async () => '' };
   };
@@ -88,7 +88,7 @@ test('reads MLflow and Unity Catalog registries, newest version first, with run 
   assert.ok(seen.every((s) => s.auth === 'Bearer tok'));
   const uc = await readRegistry({ kind: 'databricks-uc', host: 'https://dbc.example.com/browse/catalogs?o=123', model: 'main.risk.claims', token: 't' }, { fetchImpl, resolve });
   assert.ok(seen.some((x) => x.url.startsWith('https://dbc.example.com/api/2.1/unity-catalog/')), 'pasted page address trimmed to the workspace');
-  assert.equal(uc.latest, '3'); assert.deepEqual(uc.versions[0].aliases, ['champion']); assert.equal(uc.versions[0].description, 'retrained');
+  assert.equal(uc.latest, '3'); assert.equal(uc.info.description, 'Claims model'); assert.equal(uc.info.owner, 'ml-team'); assert.deepEqual(uc.versions[0].aliases, ['champion']); assert.equal(uc.versions[0].description, 'retrained');
   await assert.rejects(readRegistry({ kind: 'databricks-uc', host: 'https://dbc.example.com', model: 'claims', token: 't' }, { fetchImpl, resolve }), /catalog\.schema\.model/);
   await assert.rejects(readRegistry({ kind: 'mlflow', host: 'https://ml.example.com', model: "x' or name='y", token: 't' }, { fetchImpl, resolve }), /exactly/);
   const redirect = async () => ({ ok: false, status: 302, text: async () => '' });

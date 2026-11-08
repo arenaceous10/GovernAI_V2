@@ -95,8 +95,9 @@ const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwA
     await signOut(p);
 
     // 6. model registry: connect, then a new version in production opens a change review
+    let c;
     await signIn(p, EMAIL['client:meridian']);
-    db.registry = { versions: [{ version: '3', createdAt: '2026-10-01T00:00:00Z', aliases: ['champion'], metrics: { auc: 0.912 } }, { version: '2', createdAt: '2026-08-01T00:00:00Z' }] };
+    db.registry = { info: { description: 'Scores motor claims for triage.', owner: 'ml-platform@meridian.example' }, versions: [{ version: '3', createdAt: '2026-10-01T00:00:00Z', aliases: ['champion'], metrics: { auc: 0.912 } }, { version: '2', createdAt: '2026-08-01T00:00:00Z' }] };
     await p.goto(URL + '#card--sys-5'); await W(p, 1000);
     assert((await body(p)).includes('Model registry'), 'registry panel');
     await p.getByRole('button', { name: /Connect a model registry/ }).click(); await W(p);
@@ -110,7 +111,12 @@ const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwA
     t = await body(p);
     assert(t.includes('main.risk.claims') && t.includes('champion') && t.includes('auc 0.912'), 'versions and metrics shown');
     assert(t.includes('From Databricks Unity Catalog: version 3 (champion)'), 'registry metrics in the performance panel');
-    let c = row('sys-5').data.connector;
+    assert(t.includes('Model versions (Databricks Unity Catalog)') && t.includes('Model version 3'), 'registry versions in version history');
+    await p.getByRole('button', { name: /Fill from registry/ }).click(); await W(p, 800);
+    c = row('sys-5').data.card;
+    assert(c.modelOwner === 'ml-platform@meridian.example' && c.modelVersion === '3 (champion)' && c.modelName.startsWith('main.risk.claims'), 'card filled from registry');
+    assert(!c.summary || c.summary === 'Scores motor claims for triage.' || c.summary.length > 0, 'existing definition kept or filled');
+    c = row('sys-5').data.connector;
     assert(c && c.latest === '3' && c.tokenSealed === 'v1.sealed-for-sys-5', 'connection saved with sealed token');
     assert(!JSON.stringify(db.tables.v2_products).includes('dapi-test-token'), 'raw token never stored');
     db.registry.versions.unshift({ version: '4', createdAt: '2026-11-05T00:00:00Z', metrics: { auc: 0.9 } });

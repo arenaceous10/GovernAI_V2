@@ -1103,3 +1103,4 @@ h1, h2, h3 { text-wrap: balance; }
 .check-item.flash { animation: ci-flash 1.6s ease-out; border-radius: 6px; }
 @keyframes ci-flash { 0%, 40% { background: var(--warn-bg); box-shadow: 0 0 0 2px var(--warn); } 100% { background: transparent; box-shadow: none; } }
 .ci-skip-btn { white-space: nowrap; }
+.vh-h { font-size: 0.8rem; font-weight: 600; color: var(--ink-2); margin: 0 0 4px; }

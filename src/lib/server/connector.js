@@ -76,9 +76,14 @@ export async function readRegistry({ kind, host, model, token }, { fetchImpl = f
   const checked = await checkHost(host, { allowLocal, resolve });
   // A Databricks workspace answers at its root, so a pasted page address (path, ?o=...) is trimmed to the origin.
   const base = kind === 'databricks-uc' ? new URL(checked).origin : checked;
-  let versions;
+  let versions; let info = {};
   if (kind === 'mlflow') {
-    const j = await getJson(fetchImpl, `${base}/api/2.0/mlflow/model-versions/search?max_results=50&filter=${encodeURIComponent(`name='${name}'`)}`, token);
+    const [j, m] = await Promise.all([
+      getJson(fetchImpl, `${base}/api/2.0/mlflow/model-versions/search?max_results=50&filter=${encodeURIComponent(`name='${name}'`)}`, token),
+      getJson(fetchImpl, `${base}/api/2.0/mlflow/registered-models/get?name=${encodeURIComponent(name)}`, token).catch(() => ({})),
+    ]);
+    const rm = m.registered_model || {};
+    info = { description: String(rm.description || '').slice(0, 1000), owner: '', createdBy: String(rm.user_id || '').slice(0, 200) };
     versions = (j.model_versions || []).map((v) => ({
       version: String(v.version), createdAt: iso(v.creation_timestamp), status: v.status || '', stage: v.current_stage || '',
       aliases: v.aliases || [], runId: v.run_id || '', description: String(v.description || '').slice(0, 500), source: String(v.source || '').slice(0, 300),
@@ -92,6 +97,7 @@ export async function readRegistry({ kind, host, model, token }, { fetchImpl = f
     ]);
     const al = {};
     for (const a of m.aliases || []) (al[String(a.version_num)] ||= []).push(a.alias_name);
+    info = { description: String(m.comment || '').slice(0, 1000), owner: String(m.owner || '').slice(0, 200), createdBy: String(m.created_by || '').slice(0, 200) };
     versions = (j.model_versions || []).map((v) => ({
       version: String(v.version), createdAt: iso(v.created_at), status: v.status || '', stage: '',
       aliases: al[String(v.version)] || [], runId: v.run_id || '', description: String(v.comment || '').slice(0, 500), source: String(v.source || '').slice(0, 300),
@@ -105,5 +111,5 @@ export async function readRegistry({ kind, host, model, token }, { fetchImpl = f
       v.metrics = Object.fromEntries((r.run?.data?.metrics || []).slice(0, 30).map((x) => [String(x.key).slice(0, 60), num(x.value)]).filter(([, x]) => x != null));
     } catch { v.metrics = {}; }
   }
-  return { model: name, versions: versions.slice(0, 50), latest: versions[0]?.version || null };
+  return { model: name, info, versions: versions.slice(0, 50), latest: versions[0]?.version || null };
 }
