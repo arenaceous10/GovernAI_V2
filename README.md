@@ -1,63 +1,118 @@
 # GovernAI
 
-Responsible AI governance, from intake to retirement. Clients register AI products; the governance team
-reviews evidence and signs off each of the ten lifecycle stages from the Responsible AI charter.
+Responsible AI governance, from intake to retirement. Clients register their AI products; the governance team reviews
+evidence and signs off each of the ten lifecycle stages. Every submission and decision goes into a tamper-evident record
+that anyone can check, and the same data produces EU AI Act and DPDP documentation drafts.
+
+Indicative assessment, not legal advice.
+
+## Contents
+
+- [Run it](#run-it)
+- [Configuration](#configuration)
+- [Database (Supabase)](#database-supabase)
+- [Deploy on Vercel](#deploy-on-vercel)
+- [Roles and sign-in](#roles-and-sign-in)
+- [How a product moves through GovernAI](#how-a-product-moves-through-governai)
+- [Features](#features)
+- [Security and privacy](#security-and-privacy)
+- [Tests](#tests)
+- [Layout](#layout)
 
 ## Run it
 
 ```bash
 npm install          # once, needs internet
 npm run dev          # http://localhost:5173
-npm test             # engine and database-layer tests
+npm test             # unit tests (engine, store sync, features, AI guard, record and packs, operations, documents)
+npm run test:db      # database rules and triggers, on an in-process Postgres (PGlite)
 npm run build        # production build in dist/
 npm run build:single # one self-contained dist-single/index.html (double-click to open)
 ```
 
+Without database settings the app runs on **demo data in the browser**: a portfolio of 8 products across 3 clients, a
+role switcher instead of sign-in, and the sidebar says "Demo data in this browser". Administrator > Settings > Reset to
+demo data restores it. Signed evidence packs and the model-registry connection need the server and are off in demo mode.
+
+## Configuration
+
+Copy `.env.example` to `.env.local` for local runs. On Vercel add the same names under Settings > Environment Variables.
+
+| Name | Where | What it does |
+|---|---|---|
+| `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | browser and server | Supabase project and its publishable key. Leave empty for demo mode. Never use the service-role key. |
+| `GEMINI_API_KEY` | server only | Tailored assessment questions written by Gemini (`api/generate-questions.js`). Without it the built-in rules pick them. Never prefix with `VITE_`. |
+| `GEMINI_MODEL`, `GEMINI_FALLBACK_MODELS` | server only | Optional model choice and comma-separated fallbacks. |
+| `EVIDENCE_SIGNING_KEY` | server only | Ed25519 private key (PKCS#8 DER, base64) that signs evidence packs. Its public half must match `src/data/evidenceKey.js`. |
+| `CONNECTOR_KEY` | server only | 32 random bytes, base64. Encrypts model-registry tokens. Changing it means clients reconnect their registries. |
+
+Generate the two keys once:
+
+```bash
+node -e "const c=require('crypto');const {publicKey,privateKey}=c.generateKeyPairSync('ed25519');
+console.log('EVIDENCE_SIGNING_KEY='+privateKey.export({format:'der',type:'pkcs8'}).toString('base64'));
+console.log('public key for src/data/evidenceKey.js: '+publicKey.export({format:'der',type:'spki'}).toString('base64'));
+console.log('CONNECTOR_KEY='+c.randomBytes(32).toString('base64'))"
+```
+
+If you replace the signing key, update `src/data/evidenceKey.js` in the same deploy. Packs signed with the old key then
+show "Signature does not match", so keep the old public key somewhere if older packs must stay checkable.
+
 ## Database (Supabase)
 
-With `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` set (see `.env.example`), every change is saved to Supabase and shared
-between browsers. Without them the app runs on browser-only demo data (sidebar shows which). On first run it seeds a demo
-portfolio of 8 products across 3 clients. Administrator > Settings > Reset to demo data restores it.
+Run the migrations in order in the Supabase SQL editor (or with the Supabase CLI). All tables are prefixed `v2_` and sit
+beside any other tables in the project; the older tables (`use_cases`, `checklist`, `approvals`, `audit`, `incidents`,
+`changes`, `screenings`, `actions`) are not touched.
 
-- Tables are prefixed `v2_` (`supabase/migrations/001_governai_v2.sql`) and sit beside any other tables in the project.
-- **Demo access only:** there is no login yet, so row-level security lets the browser key read and write these tables.
-  Keep sample data only until sign-in is added, then replace the `demo open access` policies with per-user rules.
-- Evidence files go to the private Storage bucket `v2-evidence` (`supabase/migrations/002_evidence_files.sql`), up to 10 MB
-  each, and open through a link that expires after 10 minutes. Replacing or removing evidence deletes the old file.
-  Browser-only mode keeps files up to 2 MB in the browser instead.
-- A save failure shows "Not saved" with a Retry button in the sidebar. Other people's changes appear when the tab regains focus.
+| Migration | What it adds |
+|---|---|
+| `001_governai_v2.sql` | Products (one JSON document per product), clients, settings, audit log. |
+| `002_evidence_files.sql` | Private Storage bucket `v2-evidence`: files up to 10 MB, opened through links that expire after 10 minutes. |
+| `003_auth_rbac.sql` | Sign-in profiles, roles and row-level security: clients see only their organisation; internal notes are in a separate table clients cannot read. |
+| `004_ai_usage.sql` | Usage counter for the AI question endpoint. |
+| `005_security_fixes.sql` | Product write rules enforced by a trigger (see [Security](#security-and-privacy)), server-stamped audit entries, atomic AI rate limits, new accounts start as pending. |
+| `006_function_privileges.sql` | Tighter execute rights and search paths on the database functions. |
+| `007_ledger_and_ops.sql` | Tamper-evident record (`v2_ledger`) written by triggers, and client branding. Existing products get a starting entry. |
+
+Saving: every change is saved as it happens. A failure shows "Not saved" with Retry in the sidebar. Other people's changes
+appear when the tab regains focus. In Supabase Auth settings, keep email confirmation on and turn on leaked-password protection.
 
 ## Deploy on Vercel
 
-Import the repo (framework: Vite). Optional: set `GEMINI_API_KEY` (and `GEMINI_MODEL`) so the tailored questions are
-written by Gemini through `api/generate-questions.js`. Without it, the built-in rules engine picks them.
+Import the repo (framework: Vite) and set the variables above. `vercel.json` adds the security headers (content security
+policy, no framing, no MIME sniffing, strict referrer and permissions policies). The server functions are:
 
-## Roles
+| Function | Purpose |
+|---|---|
+| `api/generate-questions.js` | Tailored questions from Gemini, for signed-in users, rate-limited, with personal data removed first. |
+| `api/evidence.js` | `GET`: the public key that checks evidence packs. `POST`: a signed pack for one product the caller may see. |
+| `api/connector.js` | Seals a registry token, tests a registry connection, reads model versions and metrics. |
+
+Every function checks the caller's Supabase session and reads with that person's own token, so row-level security limits
+what it can see.
+
+## Roles and sign-in
+
+People create their own account. Every new account waits until an administrator approves it, including someone who
+creates a new organisation at sign-up (the admin list flags those). Disabled accounts lose access at once.
 
 | Role | Home screen | Does |
 |---|---|---|
-| Client | Your next steps, products by lifecycle phase | Registers and re-assesses products, ticks checklists, attaches evidence, submits stages, updates actions and data assets, raises changes, incidents and retirement. Sees only their own products and never sees internal notes. |
-| Governance reviewer | Review queue with waiting time, pipeline board | Reviews submitted stages: approve, approve with conditions, or return, with a comment to the client and an optional internal note. Read-only otherwise. |
-| Governance lead | Gate decisions, risk-by-phase matrix, pipeline board | Also signs stages 2, 5 and 6 for High-risk products, can sign in a reviewer's place, can override a gate with a reason, can raise production events. |
-| Administrator | Setup shortcuts and recent activity | Clients and users, question bank wording, frameworks, tier cut-offs, audit log. Read-only on products. |
+| Client | Next steps, products by lifecycle phase, charts | Registers and re-assesses products, ticks checklists, skips optional checks with a reason, attaches evidence, submits stages, manages actions, controls, data assets and the AI card, connects a model registry, raises changes, incidents and retirement. Sees only its own organisation. |
+| Governance reviewer | Review queue, pipeline board | Approves, approves with conditions or returns submitted stages, with a comment and an optional internal note. Sees Operations. |
+| Governance lead | Gate decisions, risk-by-phase matrix | Also signs stages 2, 5 and 6 for high-risk products, can sign in a reviewer's place, can override a gate with a reason, raises production events. |
+| Administrator | Setup shortcuts, recent activity | Approves accounts; manages clients (including logo and colour), users, question bank, frameworks, tier cut-offs, mandatory checks, review target; reads the audit log. |
 
-The permissions are enforced in the store as well as the UI. Internal notes are hidden in the app, but until real sign-in
-replaces the demo database access they are stored in the same product record, so treat them as confidential only after login is added.
+Permissions are enforced in the database, not only in the app.
 
-## Tools for everyone
+## How a product moves through GovernAI
 
-- **Deadline radar**: EU AI Act and DPDP dates that apply to each product, with a countdown (`src/data/deadlines.js`).
-- **Notifications**: decisions on your products, submissions for reviewers, pending sign-ups for administrators.
-- **Quick search**: Ctrl K or Cmd K.
-
-## Flow
-
-1. **Register** (5 steps): product details (dropdowns for domain, 21 AI types, sourcing; searchable list of every country),
-   frameworks, risk profile, questionnaire, review.
-2. **Score**: common to every framework, based on the six Responsible AI principles
-   (Social well-being and planet inclusive 14, Privacy and safety 20, Fairness and equity 20, Robustness and stability 16,
-   Accountability 16, Transparency 14).
-3. **Tier**: EU AI Act four tiers. Cut-offs depend on the frameworks in scope; the strictest wins.
+1. **Register** (5 steps): product details, frameworks in scope, risk profile, questionnaire, review. Every question
+   offers "Not known"; each such answer becomes an action to find out.
+2. **Score**: based on the six Responsible AI principles (Social well-being and planet inclusive 14, Privacy and safety 20,
+   Fairness and equity 20, Robustness and stability 16, Accountability 16, Transparency 14). About 75% standard questions per
+   framework and 25% tailored to the product; four options per question scored 0 / 35 / 70 / 100.
+3. **Tier**: the EU AI Act's four tiers. Cut-offs depend on the frameworks in scope and the strictest wins:
 
    | Framework | Limited from | High from |
    |---|---|---|
@@ -68,44 +123,113 @@ replaces the demo database access they are stored in the same product record, so
 
    Prohibited practices are always Unacceptable. With the EU AI Act in scope, Annex III uses are at least High and
    Art. 50 uses at least Limited. Cut-offs are editable in Settings.
-4. **Lifecycle**: the product starts at stage 1. Each stage has the charter's checklist, required evidence and exit gate.
-   The client ticks the checklist, attaches evidence and submits; the governance team approves or returns. Approval moves
-   it to the next stage. After go-live it stays in stage 7; a change opens stage 8 and an incident stage 9 (both return
-   to 7); stage 10 retires it.
+4. **Lifecycle**: ten stages, each with a checklist, required evidence and an exit gate. Checks are **mandatory** or
+   **optional**; an optional check can be skipped with the "Skip with reason" button on its row (category, written
+   reason, target date for planned work). Submit for review unlocks when mandatory checks are ticked and every optional
+   one is ticked or skipped. The governance team approves or returns; approval moves the product on. After go-live it
+   stays in stage 7; a change opens stage 8 and an incident stage 9 (both return to 7); stage 10 retires it.
 
-Questionnaire: about 75% standard questions per framework and 25% tailored to the product; four options per question
-scored 0 / 35 / 70 / 100 by position.
+## Features
+
+**For everyone**
+- **Deadline radar**: EU AI Act and DPDP dates that apply to each product, with a countdown (`src/data/deadlines.js`).
+- **Notifications**: decisions on your products, submissions and overdue reviews for the governance team, pending sign-ups for administrators.
+- **Quick search**: Ctrl K or Cmd K jumps to any product or page.
+
+**Products**
+- **Controls and actions**: 22 controls mapped to checklist items, each shown as operating, in progress or gap; actions come from skipped checks, "Not known" answers, reviewers and clients.
+- **AI cards**: a register of every AI product, like a business glossary entry for a data asset: purpose, owners, data, limitations, oversight, metrics, versions.
+- **Data and lineage**: datasets with owners, stewards, classification and a lineage graph.
+- **Dashboard charts** for clients: products by stage, risk and answers.
+
+**Proof and documents**
+- **Tamper-evident record** (Record tab): the database writes an entry for every registration, stage and status move,
+  submission (with a fingerprint of the checks, skips and evidence file names submitted), decision, edit of an earlier
+  entry and deletion. Each entry is hashed together with the one before it (SHA-256), so changing or removing any entry
+  breaks the chain from there on. Nobody can write to the record through the API. The tab re-checks the chain in the
+  browser and compares it with what the product shows.
+- **Signed evidence packs**: a download holding the product, its full record and an Ed25519 signature. Anyone can check
+  one on the public "Check an evidence pack" page (`#verify`, no account needed); signed-in users also see whether the
+  live record still matches. Keep packs as receipts: if history were rewritten later, the pack would no longer match.
+- **Report menu**:
+  - Dashboard deck (PowerPoint, with SWOT and the AI Compass).
+  - Full audit report (HTML).
+  - **Annex IV technical documentation** (Word draft): the nine Annex IV sections, filled from the product, gaps marked with what to add.
+  - **DPDP pack** (Word draft): processing record and privacy notice draft. Tick the option to add the Significant Data Fiduciary part (impact assessment, audit, algorithmic due diligence).
+
+  Documents are filled from stored data only, never by a language model, and include the client's logo when set.
+
+**Integrations**
+- **Model registry** (AI card): connect MLflow or Databricks Unity Catalog with a read-only token. Versions and run
+  metrics appear on the card; a new version of a product in production opens a change review. The registry is checked
+  when the card opens (if not checked in the last 12 hours), with "Check now", or for every product from Operations.
+  There is no background schedule, because that would need a service-role key.
+
+**For the governance team**
+- **Operations**:
+  - Review timers against a working-day target (default 5, set in Settings).
+  - Reviewer workload: decisions and median turnaround.
+  - A portfolio row per client.
+  - **Time to value**: days from a client's start to its first approved stage, with the median across clients.
+- **Client branding**: an administrator sets each client's logo and accent colour, shown in its portal and documents.
+
+## Security and privacy
+
+- **Row-level security**: clients read and write only their organisation's products, files and records.
+- **Product rules in the database**: a trigger checks every product write. Clients cannot approve stages, change review dates, skip stages, edit submitted or approved stages, rewrite the stage log, or pose as another product or organisation.
+- **Audit entries** from clients are stamped by the server with the real time, role, name and organisation.
+- **AI endpoint**:
+  - Only for signed-in users, with per-user hourly and daily limits and a global daily limit, counted atomically.
+  - Requests limited to 24 KB.
+  - **No sensitive data to the language model**: names, emails, phone numbers, identifiers, account numbers and the client's own names are removed before anything is sent (`src/lib/redact.js`).
+- **Registry tokens** are encrypted with AES-256-GCM on the server and tied to one product. The connector only calls public https addresses (checked after DNS lookup), follows no redirects and caps time and size.
+- **Exports**: reports escape all values, and CSV exports neutralise spreadsheet formulas.
+- **Files** open only from safe link types.
 
 ## Tests
 
 ```bash
-npm test
-npm run build && npx vite preview --port 4173
+npm test && npm run test:db
+
+npx playwright install chromium            # once
+# Browser-only demo build:
+npm run build && node tests/e2e/serve-with-headers.cjs dist 4173 &
 node tests/e2e/lifecycle.cjs               # landing, registration, all 10 stages, returns, override, incident, retirement
 node tests/e2e/drafts-reassess-mobile.cjs  # drafts, re-assessment, mobile layout
+node tests/e2e/features.cjs                # Not known, skips with reasons, controls, actions, AI cards, deck
+node tests/e2e/contrast.cjs                # text contrast on every page
 node tests/e2e/random-clicks.cjs 7 3       # random clicks on every page for every role
-node tests/e2e/evidence.cjs                # upload, open as reviewer, replace, remove evidence files
-node tests/e2e/bugs.cjs                    # cloud: double-click approve, access turned off, check again, search, notifications
-node tests/e2e/questions.cjs               # cloud: admin adds questions, client sees them
-node tests/e2e/auth.cjs                    # cloud: sign-up, sign-in, role-based access
-# Cloud mode, against an in-memory Supabase stand-in (tests/e2e/fake-supabase.cjs):
-VITE_SUPABASE_URL=https://fake.supabase.co VITE_SUPABASE_ANON_KEY=test npx vite build --outDir dist-cloudtest
-npx vite preview --outDir dist-cloudtest --port 4174
+
+# Cloud build against the in-memory Supabase stand-in (tests/e2e/fake-supabase.cjs), signed with a test key:
+VITE_SUPABASE_URL=https://fake.supabase.co VITE_SUPABASE_ANON_KEY=test \
+VITE_EVIDENCE_PUBLIC_KEY=$(node -e "console.log(require('./tests/e2e/test-evidence-key.cjs').pub)") \
+  npx vite build --outDir dist-cloud
+node tests/e2e/serve-with-headers.cjs dist-cloud 4174 &
+node tests/e2e/auth.cjs                    # sign-up, approval, sign-in, role-based access
 node tests/e2e/cloud.cjs
-CLOUD=1 node tests/e2e/lifecycle.cjs
-CLOUD=1 node tests/e2e/evidence.cjs
+node tests/e2e/evidence.cjs                # upload, open as reviewer, replace, remove evidence files
+node tests/e2e/bugs.cjs                    # double-click approve, access turned off, search, notifications
+node tests/e2e/questions.cjs               # admin adds questions, client sees them
+node tests/e2e/clients.cjs                 # client administration
+node tests/e2e/proof.cjs                   # record, signed packs, public check, Word drafts, registry, operations, branding
 ```
-(e2e scripts need `npm i -D playwright`.)
+
+`serve-with-headers.cjs` serves a build with the same security headers as `vercel.json`.
 
 ## Layout
 
 ```
-api/generate-questions.js   Gemini endpoint (Vercel)
-src/data/                   lifecycle.js (charter stages), frameworks.js, questionBank.js, countries.js
-src/engine/                 engine.js (scoring, tiers, question selection), report.js
-src/store/                  store.jsx (state), sync.js (Supabase reads/writes), seed.js (demo data)
-supabase/migrations/        SQL for the v2_ tables
-src/pages/                  Landing, Dashboard, Products, Product (lifecycle), NewAssessment, Other, Admin, Catalog
+api/                        Vercel functions: generate-questions, evidence, connector
+src/data/                   lifecycle.js (stages), frameworks.js, questionBank.js, controls.js, card.js,
+                            deadlines.js, countries.js, evidenceKey.js (public key for packs)
+src/engine/                 engine.js (scoring, tiers, questions), insights.js, report.js, deck.js,
+                            docpack.js (Annex IV and DPDP), ops.js (timers, workload, time to value)
+src/lib/                    cloud.js, files.js, redact.js, aiGuard.js, ledger.js (record and pack checks),
+                            api.js, serverAuth.js, server/ (evidence signing, registry connector)
+src/store/                  store.jsx (state and permissions), sync.js (Supabase reads and writes), seed.js (demo data)
+src/pages/                  Landing, Auth, Dashboard, Products, Product, NewAssessment, AICard, Catalog, Ops, Admin, Other
+src/components/             ui, Stages, Results, Insights, DataAssets, LineageGraph, Proof (record and check page),
+                            Registry (model registry), Extras (notifications, search, toasts)
+supabase/migrations/        SQL, run in order
+tests/                      unit tests, db/ (PGlite), e2e/ (Playwright)
 ```
-
-Indicative assessment, not legal advice.
