@@ -34,7 +34,8 @@ function stageEvidence(s, n) {
 
 const metricsText = (s) => {
   const own = (s.card?.metrics || []).filter((m) => m.name && m.value).map((m) => `${m.name} ${m.value}${m.at ? ` (${m.at})` : ''}`);
-  const reg = s.connector?.versions?.[0];
+  const vs = s.connector?.versions || [];
+  const reg = vs.find((v) => (v.aliases || []).some((a) => /champion|prod/i.test(a)) || /production/i.test(v.stage || '')) || vs[0];
   const fromReg = reg?.metrics ? Object.entries(reg.metrics).map(([k, v]) => `${k} ${Math.round(v * 10000) / 10000} (registry, version ${reg.version})`) : [];
   return list([...own, ...fromReg]);
 };

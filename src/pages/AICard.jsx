@@ -74,6 +74,12 @@ function Attr({ label, children }) {
   return <div className="attr"><dt>{label}</dt><dd>{children || <span className="mute">Not documented</span>}</dd></div>;
 }
 
+// The registry version whose metrics describe the product: the one marked champion (or in Production), else the newest.
+function registryVersion(c) {
+  const vs = c?.versions || [];
+  return vs.find((v) => (v.aliases || []).some((a) => /champion|prod/i.test(a)) || /production/i.test(v.stage || '')) || vs[0] || null;
+}
+
 export default function AICardPage({ id, nav }) {
   const { getSystem, systems, state, role, saveCard } = useStore();
   const s = getSystem(id);
@@ -158,9 +164,25 @@ export default function AICardPage({ id, nav }) {
                 ))}
                 <div><button type="button" className="btn sm" onClick={() => setD({ ...d, metrics: [...(d.metrics || []), { name: '', value: '', at: '' }] })}><Plus size={14} /> Add metric</button></div>
               </div>
-            ) : (c.metrics || []).filter((m) => m.name).length ? (
-              <div className="metric-grid">{c.metrics.filter((m) => m.name).map((m, i) => <div key={i} className="metric"><span className="xs mute">{m.name}</span><b className="num">{m.value}</b>{m.at && <span className="xs mute">{fmtDate(m.at)}</span>}</div>)}</div>
-            ) : <p className="small mute">No metrics recorded yet.</p>}
+            ) : (() => {
+              const own = (c.metrics || []).filter((m) => m.name);
+              const rv = registryVersion(s.connector);
+              const reg = rv?.metrics ? Object.entries(rv.metrics) : [];
+              if (!own.length && !reg.length) return <p className="small mute">No metrics recorded yet. Add them here, or connect the model registry below to bring them in from the latest training run.</p>;
+              return (
+                <>
+                  {own.length > 0 && <div className="metric-grid">{own.map((m, i) => <div key={i} className="metric"><span className="xs mute">{m.name}</span><b className="num">{m.value}</b>{m.at && <span className="xs mute">{fmtDate(m.at)}</span>}</div>)}</div>}
+                  {reg.length > 0 && (
+                    <>
+                      <p className="xs mute" style={{ margin: own.length ? '14px 0 6px' : '0 0 6px' }}>
+                        From {s.connector.kind === 'databricks-uc' ? 'Databricks Unity Catalog' : 'MLflow'}: version {rv.version}{rv.aliases?.length ? ` (${rv.aliases.join(', ')})` : ''}{rv.createdAt ? `, registered ${fmtDate(rv.createdAt)}` : ''}. Updated each time the registry is checked.
+                      </p>
+                      <div className="metric-grid">{reg.map(([k, v]) => <div key={k} className="metric"><span className="xs mute">{k}</span><b className="num">{Math.round(v * 10000) / 10000}</b></div>)}</div>
+                    </>
+                  )}
+                </>
+              );
+            })()}
           </Panel>
 
           <RegistryPanel s={s} />

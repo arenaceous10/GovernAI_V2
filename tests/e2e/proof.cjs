@@ -109,6 +109,7 @@ const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwA
     await p.getByRole('button', { name: /Test and connect/ }).click(); await W(p, 1500);
     t = await body(p);
     assert(t.includes('main.risk.claims') && t.includes('champion') && t.includes('auc 0.912'), 'versions and metrics shown');
+    assert(t.includes('From Databricks Unity Catalog: version 3 (champion)'), 'registry metrics in the performance panel');
     let c = row('sys-5').data.connector;
     assert(c && c.latest === '3' && c.tokenSealed === 'v1.sealed-for-sys-5', 'connection saved with sealed token');
     assert(!JSON.stringify(db.tables.v2_products).includes('dapi-test-token'), 'raw token never stored');
