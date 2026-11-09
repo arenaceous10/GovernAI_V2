@@ -50,7 +50,18 @@ export const CAN = {
 };
 
 // The current stage, still with the client (not submitted, approved, retired or blocked).
-const workable = (x, n) => n === x.stage && !['Retired', 'Blocked', 'Draft'].includes(x.status) && ['open', 'returned'].includes(x.stages?.[n]?.status || 'open');
+// Withdrawal is for registered products that never went live; live products retire through stage 10.
+export const canWithdraw = (x) => !!x && ['Active', 'Blocked'].includes(x.status) && x.stage < 7;
+export const WITHDRAW_REASONS = ['Project cancelled', 'Duplicate of another product', 'Registered by mistake', 'Replaced by another product', 'Not an AI system', 'Other'];
+// Permanent deletion: only withdrawn or retired products, after the retention period.
+export function purgeEligible(x, days = 30) {
+  if (!x || !['Withdrawn', 'Retired'].includes(x.status)) return { ok: false, why: 'Only withdrawn or retired products can be deleted permanently' };
+  const since = x.status === 'Withdrawn' ? x.withdrawal?.decidedAt : (x.stages?.[10]?.approvedAt || x.updatedAt);
+  const left = since ? Math.ceil(days - (Date.now() - new Date(since).getTime()) / 86400000) : 0;
+  return left > 0 ? { ok: false, why: `Kept for ${days} days after it was ${x.status.toLowerCase()}: ${left} day${left === 1 ? '' : 's'} left`, left } : { ok: true };
+}
+
+const workable = (x, n) => n === x.stage && !['Retired', 'Withdrawn', 'Blocked', 'Draft'].includes(x.status) && ['open', 'returned'].includes(x.stages?.[n]?.status || 'open');
 
 export const newStage = () => ({ status: 'open', checklist: {}, evidence: {}, approvals: {}, note: '' });
 
@@ -61,6 +72,7 @@ export function stageBlockers(sys, rules = {}) {
   const rec = sys.stages?.[sys.stage] || newStage();
   if (sys.status === 'Blocked') return ['Prohibited practice: this product cannot proceed'];
   if (sys.status === 'Retired') return ['Retired'];
+  if (sys.status === 'Withdrawn') return ['Withdrawn'];
   const tier = sys.assessment?.results?.tier;
   const open = st.checklist.filter((i) => itemState(rec, i) === 'open');
   const mand = open.filter((i) => isMandatory(i, tier, rules));
@@ -239,8 +251,11 @@ export function StoreProvider({ children, standalone = null }) {
   }, []);
 
   const api = useMemo(() => {
-    const systems = visibleSystems(state);
-    const getSystem = (id) => systems.find((x) => x.id === id);
+    const allVisible = visibleSystems(state);
+    // Withdrawn products leave every list, chart and count; they stay readable from the archive.
+    const systems = allVisible.filter((x) => x.status !== 'Withdrawn');
+    const withdrawn = allVisible.filter((x) => x.status === 'Withdrawn');
+    const getSystem = (id) => allVisible.find((x) => x.id === id);
     // Clients only see their own products, so a running number would clash across organisations.
     const nextCode = (list) => {
       const taken = new Set(list.map((x) => x.code));
@@ -254,7 +269,7 @@ export function StoreProvider({ children, standalone = null }) {
       stage: 1, stages: { 1: newStage() }, status: 'Draft', nextReview: null, actions: [], history: [], events: [], datasets: [], outputs: [], assessment: null,
     });
     return {
-      state, systems, getSystem,
+      state, systems, withdrawn, getSystem,
       role: state.role,
       clientOrg: state.clientOrg,
       client: state.clients.find((c) => c.id === state.clientOrg),
@@ -416,7 +431,7 @@ export function StoreProvider({ children, standalone = null }) {
         return log(next, `Stage ${outcome === 'Returned' ? 'returned' : 'approved'}`, id, `Stage ${n}${comment ? `: ${comment}` : ''}`);
       }),
       override: (id, n, reason) => CAN.override(state.role) && updateSystem(id, (x) => {
-        if (x.stage !== n || ['Retired', 'Blocked', 'Draft'].includes(x.status) || x.stages?.[n]?.status === 'approved') return x;
+        if (x.stage !== n || ['Retired', 'Withdrawn', 'Blocked', 'Draft'].includes(x.status) || x.stages?.[n]?.status === 'approved') return x;
         return advanceFrom({
           ...x, stages: { ...x.stages, [n]: { ...(x.stages[n] || newStage()), log: [...(x.stages[n]?.log || []), { at: nowIso(), who: 'lead', outcome: 'Overridden', comment: reason }], approvals: { ...(x.stages[n]?.approvals || {}), lead: { outcome: 'Approved with conditions', comment: `Override: ${reason}`, at: nowIso() } } } },
         }, n, `Override: ${reason}`);
@@ -587,6 +602,47 @@ export function StoreProvider({ children, standalone = null }) {
             notes: (s.notes || []).filter((n) => !pids.has(n.productId)),
           }, 'Client deleted', null, `${client.name}: ${products.length} product${products.length === 1 ? '' : 's'} removed, ${people.length} ${people.length === 1 ? 'person' : 'people'} moved to waiting for approval`);
         });
+        return '';
+      },
+      // ----- withdrawing and deleting AI products -----
+      // Drafts are deleted straight away. A registered product that never reached production is withdrawn: the client
+      // asks with a reason, a governance lead or administrator decides, and the product is archived with its full
+      // record. Products in production are retired through stage 10 instead. An administrator may delete a withdrawn
+      // or retired product permanently once the retention period has passed; the tamper-evident record keeps the
+      // deletion and everything before it.
+      requestWithdrawal: (id, w) => CAN.work(state.role) && updateSystem(id, (x) => {
+        if (!canWithdraw(x) || x.withdrawal?.status === 'requested') return x;
+        return { ...x, withdrawal: { status: 'requested', at: nowIso(), by: state.role, byName: state.me?.name || null,
+          category: w.category, reason: String(w.reason || '').trim().slice(0, 1000), replacedBy: w.replacedBy || null } };
+      }, 'Withdrawal requested', (s2) => { const x = s2.systems.find((y) => y.id === id); return `${x?.name}: ${w.category}`; }),
+      cancelWithdrawal: (id) => CAN.work(state.role) && updateSystem(id, (x) => (x.withdrawal?.status === 'requested'
+        ? { ...x, withdrawal: { ...x.withdrawal, status: 'cancelled', cancelledAt: nowIso() } } : x), 'Withdrawal request cancelled'),
+      decideWithdrawal: (id, approve, comment) => ['lead', 'admin'].includes(state.role) && updateSystem(id, (x) => {
+        if (x.withdrawal?.status !== 'requested' || !canWithdraw(x)) return x;
+        const d = { decidedAt: nowIso(), decidedBy: state.role, decidedByName: state.me?.name || null, comment: String(comment || '').trim().slice(0, 1000) };
+        return approve
+          ? { ...x, status: 'Withdrawn', withdrawal: { ...x.withdrawal, ...d, status: 'approved', previousStatus: x.status } }
+          : { ...x, withdrawal: { ...x.withdrawal, ...d, status: 'rejected' } };
+      }, approve ? 'Product withdrawn' : 'Withdrawal refused', comment || undefined),
+      restoreProduct: (id) => state.role === 'admin' && updateSystem(id, (x) => (x.status === 'Withdrawn'
+        ? { ...x, status: x.withdrawal?.previousStatus || 'Active', withdrawal: { ...x.withdrawal, status: 'restored', restoredAt: nowIso() } } : x), 'Product restored'),
+      purgeProduct: async (id) => {
+        if (state.role !== 'admin') return 'Only an administrator can delete a product permanently';
+        const x = state.systems.find((y) => y.id === id);
+        if (!x) return '';
+        const days = Number(state.settings.purgeAfterDays ?? 30);
+        const eligible = purgeEligible(x, days);
+        if (!eligible.ok) return eligible.why;
+        if (mode === 'cloud') {
+          try {
+            await queue.current;
+            const { error } = await cloud.from(T.notes).delete().eq('product_id', id);
+            if (error) return error.message;
+          } catch (e) { return e.message || 'Could not delete'; }
+          for (const rec of Object.values(x.stages || {})) for (const v of Object.values(rec.evidence || {})) if (v?.path) removeEvidence(v);
+        }
+        setState((s) => log({ ...s, systems: s.systems.filter((y) => y.id !== id), notes: (s.notes || []).filter((n) => n.productId !== id) },
+          'Product deleted permanently', null, `${x.code} ${x.name} (${x.status})`));
         return '';
       },
       addUser: (u) => setState((s) => log({ ...s, users: [...s.users, { ...u, id: uid('usr') }] }, 'User added', null, `${u.name} (${u.role})`)),

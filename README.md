@@ -73,6 +73,7 @@ beside any other tables in the project; the older tables (`use_cases`, `checklis
 | `005_security_fixes.sql` | Product write rules enforced by a trigger (see [Security](#security-and-privacy)), server-stamped audit entries, atomic AI rate limits, new accounts start as pending. |
 | `006_function_privileges.sql` | Tighter execute rights and search paths on the database functions. |
 | `007_ledger_and_ops.sql` | Tamper-evident record (`v2_ledger`) written by triggers, and client branding. Existing products get a starting entry. |
+| `008_withdrawal_guard.sql` | Clients may request or cancel a withdrawal; only the governance team decides, and withdrawn products are frozen for clients. |
 
 Saving: every change is saved as it happens. A failure shows "Not saved" with Retry in the sidebar. Other people's changes
 appear when the tab regains focus. In Supabase Auth settings, keep email confirmation on and turn on leaked-password protection.
@@ -141,6 +142,12 @@ Permissions are enforced in the database, not only in the app.
 - **AI cards**: a register of every AI product, like a business glossary entry for a data asset: purpose, owners, data, limitations, oversight, metrics, versions.
 - **Data and lineage**: datasets with owners, stewards, classification and a lineage graph.
 - **Dashboard charts** for clients: products by stage, risk and answers.
+
+**Withdrawing and deleting products**
+- **Drafts**: the client deletes them from the products list.
+- **Registered, never in production**: the client asks to withdraw with a reason (project cancelled, duplicate, registered by mistake, replaced by another product, not an AI system, other). A governance lead or administrator approves or refuses with a note. A withdrawn product leaves every list, chart and count, stays readable under "Show withdrawn products", and is read-only. An administrator can restore it.
+- **In production**: no withdrawal; retire it through stage 10 (retirement).
+- **Permanent deletion**: administrators only, for withdrawn or retired products, after a retention period (Settings, default 30 days), confirmed by typing the product code. Evidence files and internal notes are deleted too; the tamper-evident record keeps the deletion and everything before it.
 
 **Proof and documents**
 - **Tamper-evident record** (Record tab): the database writes an entry for every registration, stage and status move,
@@ -229,6 +236,7 @@ node tests/e2e/bugs.cjs                    # double-click approve, access turned
 node tests/e2e/questions.cjs               # admin adds questions, client sees them
 node tests/e2e/clients.cjs                 # client administration
 node tests/e2e/proof.cjs                   # record, signed packs, public check, Word drafts, registry, operations, branding
+node tests/e2e/withdraw.cjs                # withdrawal request, decision, archive, restore, permanent deletion
 ```
 
 `serve-with-headers.cjs` serves a build with the same security headers as `vercel.json`.

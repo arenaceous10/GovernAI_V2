@@ -28,7 +28,7 @@ export default function RegistryPanel({ s }) {
   const { role, connectModel, disconnectModel, setConnectorConfig } = store;
   const [cfg, setCfg] = useState(null);
   const c = s.connector;
-  const canConnect = ['client', 'admin'].includes(role) && s.status !== 'Retired';
+  const canConnect = ['client', 'admin'].includes(role) && !['Retired', 'Withdrawn'].includes(s.status);
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');

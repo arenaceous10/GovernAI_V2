@@ -147,7 +147,7 @@ export function Field({ label, hint, children }) {
 export const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—');
 
 const STATUS_TONE = {
-  Draft: 'mute', Active: 'ok', 'In production': 'good', Blocked: 'bad', Retired: 'mute',
+  Draft: 'mute', Active: 'ok', 'In production': 'good', Blocked: 'bad', Retired: 'mute', Withdrawn: 'mute',
   'In progress': 'mute', 'Awaiting review': 'ok', Returned: 'warn', Approved: 'good',
 };
 export function StatusPill({ status }) {

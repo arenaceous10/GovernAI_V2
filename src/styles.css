@@ -1118,3 +1118,4 @@ h1, h2, h3 { text-wrap: balance; }
 .ss-legend li { display: inline-flex; align-items: center; gap: 6px; }
 .ss-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 .uc-line { max-width: 520px; margin-top: 2px; }
+.withdraw-box { margin: 12px 0; } .withdraw-row { margin: 10px 0 2px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; } .withdraw-row > .panel { width: 100%; }

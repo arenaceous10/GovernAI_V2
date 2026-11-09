@@ -98,7 +98,7 @@ export default function AICardPage({ id, nav }) {
   if (!s || !s.assessment) return <div className="panel empty">This AI card was not found. <button className="btn ghost" onClick={() => nav('/cards')}>Back to AI cards</button></div>;
   const c = s.card || {}; const a = s.assessment; const p = a.profile; const r = a.results;
   const cs = cardStatus(s); const pc = cardCompleteness(s);
-  const canEdit = CAN.work(role) && s.status !== 'Retired';
+  const canEdit = CAN.work(role) && !['Retired', 'Withdrawn'].includes(s.status);
   const client = state.clients.find((x) => x.id === s.clientId);
   const approvers = STAGES.flatMap((st) => Object.entries(s.stages?.[st.n]?.approvals || {}).filter(([, v]) => v.outcome !== 'Returned').map(([k, v]) => ({ k, at: v.at, n: st.n })));
   const lastApproval = approvers.sort((x, y) => String(y.at).localeCompare(String(x.at)))[0];

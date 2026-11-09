@@ -19,12 +19,12 @@ grant usage on schema auth, storage, public to anon, authenticated;
 grant execute on function auth.uid() to anon, authenticated;
 grant select, insert, update, delete on storage.objects to authenticated;
 `;
-const U = { a: '00000000-0000-0000-0000-00000000000a', b: '00000000-0000-0000-0000-00000000000b', rev: '00000000-0000-0000-0000-0000000000e1', lead: '00000000-0000-0000-0000-0000000000e2', pend: '00000000-0000-0000-0000-0000000000f1' };
+const U = { a: '00000000-0000-0000-0000-00000000000a', b: '00000000-0000-0000-0000-00000000000b', rev: '00000000-0000-0000-0000-0000000000e1', lead: '00000000-0000-0000-0000-0000000000e2', admin: '00000000-0000-0000-0000-0000000000e3', pend: '00000000-0000-0000-0000-0000000000f1' };
 
 async function setup() {
   const db = new PGlite();
   await db.exec(PRELUDE);
-  for (const f of ['001_governai_v2.sql', '002_evidence_files.sql', '003_auth_rbac.sql', '004_ai_usage.sql', '005_security_fixes.sql', '006_function_privileges.sql', '007_ledger_and_ops.sql']) await db.exec(MIG(f));
+  for (const f of ['001_governai_v2.sql', '002_evidence_files.sql', '003_auth_rbac.sql', '004_ai_usage.sql', '005_security_fixes.sql', '006_function_privileges.sql', '007_ledger_and_ops.sql', '008_withdrawal_guard.sql']) await db.exec(MIG(f));
   await db.exec(`grant select, insert, update, delete on all tables in schema public to anon, authenticated;
     revoke insert, update, delete on public.v2_ai_usage from anon, authenticated;
     revoke insert, update, delete on public.v2_ledger from anon, authenticated;`);
@@ -33,10 +33,12 @@ async function setup() {
   await signup(U.b, 'b@b.test', { side: 'client', company: 'Org B', name: 'Bob B' });
   await signup(U.rev, 'r@gov.test', { side: 'team', requested_role: 'assessor', name: 'Rita Reviewer' });
   await signup(U.lead, 'l@gov.test', { side: 'team', requested_role: 'lead', name: 'Lee Lead' });
+  await signup(U.admin, 'ad@gov.test', { side: 'team', requested_role: 'admin', name: 'Ada Admin' });
   await signup(U.pend, 'p@a.test', { side: 'client', company: 'org a', name: 'Pat Pending' });
   await db.exec(`update public.v2_profiles set status = 'active' where id in ('${U.a}', '${U.b}');
                  update public.v2_profiles set role = 'assessor', status = 'active' where id = '${U.rev}';
-                 update public.v2_profiles set role = 'lead', status = 'active' where id = '${U.lead}';`);
+                 update public.v2_profiles set role = 'lead', status = 'active' where id = '${U.lead}';
+                 update public.v2_profiles set role = 'admin', status = 'active' where id = '${U.admin}';`);
   const org = async (u) => (await db.query('select client_id from public.v2_profiles where id = $1', [u])).rows[0].client_id;
   return { db, orgA: await org(U.a), orgB: await org(U.b) };
 }
@@ -261,4 +263,26 @@ test('deleting a product is recorded and its record is kept', async () => {
   await as(db, U.a, `delete from public.v2_products where id = 'pd'`);
   const rows = await ledger(db, 'pd', U.a);
   assert.deepEqual(entries(rows).map((e) => e.kind), ['registered', 'deleted']);
+});
+
+// ---------- withdrawal (migration 008) ----------
+test('clients ask to withdraw; only the governance team decides, and a withdrawn product is frozen for clients', async () => {
+  const { db, orgA } = await setup();
+  const p = { ...product('pw', orgA), status: 'Active' };
+  await upsert(db, U.a, product('pw', orgA)); await upsert(db, U.a, p);
+  const req = { ...p, withdrawal: { status: 'requested', at: 'x', category: 'Project cancelled', reason: 'Budget cut' } };
+  await upsert(db, U.a, req);
+  await fails(upsert(db, U.a, { ...req, withdrawal: { ...req.withdrawal, status: 'approved', decidedAt: 'x' } }), /governance team can decide/);
+  await fails(upsert(db, U.a, { ...req, status: 'Withdrawn' }), /./, 'client cannot set the status');
+  await upsert(db, U.a, { ...req, withdrawal: { ...req.withdrawal, status: 'cancelled' } });
+  await upsert(db, U.a, req);
+  const done = { ...req, status: 'Withdrawn', withdrawal: { ...req.withdrawal, status: 'approved', decidedAt: 'y', decidedBy: 'lead', previousStatus: 'Active' } };
+  await upsert(db, U.lead, done);
+  await fails(upsert(db, U.a, { ...done, name: 'Renamed' }), /withdrawn: only the governance team/);
+  await fails(as(db, U.a, `delete from public.v2_products where id = 'pw'`).then(async () => { if ((await read(db, 'pw'))) throw new Error('still there: refused'); }), /refused/);
+  assert.ok(entries(await ledger(db, 'pw')).some((e) => e.kind === 'status' && e.data.to === 'Withdrawn'), 'withdrawal is in the record');
+  // an administrator deletes it permanently; the record keeps the deletion
+  await as(db, U.admin, `delete from public.v2_products where id = 'pw'`);
+  assert.equal(await read(db, 'pw'), undefined);
+  assert.equal(entries(await ledger(db, 'pw')).at(-1).kind, 'deleted');
 });

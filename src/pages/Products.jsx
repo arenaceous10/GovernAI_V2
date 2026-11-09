@@ -11,7 +11,8 @@ const cell = (v) => { const t = String(v ?? ''); return /^[=+\-@\t\r]/.test(t) ?
 const csv = (rows) => rows.map((r) => r.map((v) => `"${cell(v).replaceAll('"', '""')}"`).join(',')).join('\n');
 
 export default function Products({ nav }) {
-  const { state, systems, role, deleteDraft } = useStore();
+  const { state, systems, withdrawn, role, deleteDraft } = useStore();
+  const [showArchive, setShowArchive] = useState(false);
   const [q, setQ] = useState(''); const [tier, setTier] = useState(''); const [stage, setStage] = useState(''); const [cl, setCl] = useState('');
   const cname = (id) => state.clients.find((c) => c.id === id)?.name || '';
   const drafts = systems.filter((s) => s.status === 'Draft');
@@ -83,6 +84,25 @@ export default function Products({ nav }) {
           {rows.length === 0 && <div className="empty">No products match.</div>}
         </div>
       </Panel>
+      {withdrawn.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <button className="btn ghost sm" aria-expanded={showArchive} onClick={() => setShowArchive(!showArchive)}>{showArchive ? 'Hide' : 'Show'} withdrawn products ({withdrawn.length})</button>
+          {showArchive && (
+            <Panel title="Withdrawn" sub="Archived with their full record. They no longer appear in lists, charts or counts." style={{ marginTop: 8 }}>
+              <div className="table-wrap"><table className="table">
+                <thead><tr><th>Product</th><th>Withdrawn</th><th>Why</th></tr></thead>
+                <tbody>{withdrawn.map((s) => (
+                  <tr key={s.id} className="click" onClick={() => nav(`/product/${s.id}`)}>
+                    <td><b style={{ fontWeight: 500 }}>{s.name}</b><div className="xs mute">{role !== 'client' ? `${cname(s.clientId)}, ` : ''}{s.code}</div></td>
+                    <td className="small">{fmtDate(s.withdrawal?.decidedAt)}</td>
+                    <td className="small">{s.withdrawal?.category}{s.withdrawal?.reason ? `: ${s.withdrawal.reason}` : ''}</td>
+                  </tr>
+                ))}</tbody>
+              </table></div>
+            </Panel>
+          )}
+        </div>
+      )}
     </div>
   );
 }

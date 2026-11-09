@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, BookMarked, Check, CheckCircle2, ChevronDown, Circle, SkipForward, Plus, Presentation, FileText, CornerDownLeft, Database, Download, ExternalLink, Gavel, Link2, Loader2, Lock, Paperclip, RefreshCw, Send, ShieldCheck, X } from 'lucide-react';
+import { ArrowLeft, BookMarked, Check, CheckCircle2, ChevronDown, Circle, SkipForward, Plus, Presentation, FileText, CornerDownLeft, Database, Download, ExternalLink, Gavel, Link2, Loader2, Lock, Paperclip, RefreshCw, Send, ShieldCheck, Trash2, X } from 'lucide-react';
 import { uploadEvidence, evidenceUrl, removeEvidence, hasFile, isLink, fmtSize } from '../lib/files.js';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { TIERS, DOMAINS, SOURCING, PRINCIPLES, selectionLabel, systemTypeLabel } from '../data/frameworks.js';
@@ -17,7 +17,7 @@ import { toast, ProductDeadlines } from '../components/Extras.jsx';
 import Results, { fwName } from '../components/Results.jsx';
 import DataAssets, { catalogCoverage } from '../components/DataAssets.jsx';
 import LineageGraph from '../components/LineageGraph.jsx';
-import { useStore, stageBlockers, waitingOn, newStage, CAN } from '../store/store.jsx';
+import { useStore, stageBlockers, waitingOn, newStage, CAN, canWithdraw, purgeEligible, WITHDRAW_REASONS } from '../store/store.jsx';
 import { RecordTab } from '../components/Proof.jsx';
 import { callApi } from '../lib/api.js';
 import { cloud } from '../lib/cloud.js';
@@ -288,7 +288,7 @@ function StageView({ s, n }) {
   const [event, setEvent] = useState({ kind: '', text: '' });
   const st = stageOf(n);
   const rec = s.stages?.[n] || newStage();
-  const isCurrent = n === s.stage && !['Retired', 'Blocked'].includes(s.status);
+  const isCurrent = n === s.stage && !['Retired', 'Withdrawn', 'Blocked'].includes(s.status);
   const working = isCurrent && ['open', 'returned'].includes(rec.status);
   const canEdit = working && CAN.work(role);
   const blockers = stageBlockers(s, rules);
@@ -408,7 +408,7 @@ function Assessment({ s, nav }) {
   const a = s.assessment; const fws = a.frameworks; const p = a.profile;
   return (
     <div className="stack">
-      <Panel title="Product details" right={CAN.work(role) && s.status !== 'Retired' && <button className="btn sm" onClick={() => nav(`/reassess/${s.id}`)}><RefreshCw size={14} /> Re-assess</button>}>
+      <Panel title="Product details" right={CAN.work(role) && !['Retired', 'Withdrawn'].includes(s.status) && <button className="btn sm" onClick={() => nav(`/reassess/${s.id}`)}><RefreshCw size={14} /> Re-assess</button>}>
         <dl className="kv">
           <dt>Description</dt><dd>{s.description}</dd>
           <dt>Domain</dt><dd>{selectionLabel(DOMAINS, p.domain, p.domainOther)}</dd>
@@ -694,6 +694,89 @@ function ReportMenu({ s, audit, client }) {
   );
 }
 
+// Withdrawal and permanent deletion. Products that never went live are withdrawn (client asks, governance lead or
+// administrator decides); live products retire through stage 10. Withdrawn products are archived read-only and can
+// be deleted permanently by an administrator after the retention period. Every step is in the tamper-evident record.
+function Withdrawal({ s, nav }) {
+  const { role, systems, state, requestWithdrawal, cancelWithdrawal, decideWithdrawal, restoreProduct, purgeProduct } = useStore();
+  const w = s.withdrawal;
+  const [form, setForm] = useState(null);
+  const [comment, setComment] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [err, setErr] = useState('');
+  const days = Number(state.settings.purgeAfterDays ?? 30);
+  const who = (x) => x?.byName || x?.decidedByName || ROLES[x?.by]?.name || ROLES[x?.decidedBy]?.name || '';
+  const others = systems.filter((x) => x.id !== s.id && x.clientId === s.clientId && x.status !== 'Draft');
+  const needsOther = form && ['Duplicate of another product', 'Replaced by another product'].includes(form.category);
+  const reasonOk = form && form.category && form.reason.trim().length >= 20 && (!needsOther || form.replacedBy);
+
+  if (s.status === 'Withdrawn' || s.status === 'Retired') {
+    const elig = purgeEligible(s, days);
+    if (s.status === 'Retired' && role !== 'admin') return null;
+    return (
+      <div className={`callout ${s.status === 'Withdrawn' ? 'warn' : ''} withdraw-box`}>
+        {s.status === 'Withdrawn' && <div><b>Withdrawn {fmtDate(w?.decidedAt)}</b>{who({ decidedBy: w?.decidedBy, decidedByName: w?.decidedByName }) ? ` by ${who({ decidedBy: w?.decidedBy, decidedByName: w?.decidedByName })}` : ''}. {w?.category}: {w?.reason}{w?.comment ? ` · Decision note: ${w.comment}` : ''}. The product is read-only and kept with its full record.</div>}
+        {role === 'admin' && (
+          <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            {s.status === 'Withdrawn' && <button className="btn sm" onClick={() => { restoreProduct(s.id); toast('Product restored'); }}>Restore</button>}
+            {elig.ok ? (
+              <>
+                <label className="field" style={{ minWidth: 220 }}><span className="xs">Type {s.code} to delete permanently</span>
+                  <input className="input" value={confirm} onChange={(e) => setConfirm(e.target.value)} aria-label="Product code to confirm deletion" /></label>
+                <button className="btn danger sm" disabled={confirm.trim() !== s.code} onClick={async () => {
+                  const e = await purgeProduct(s.id); if (e) { setErr(e); return; }
+                  toast(`${s.code} deleted permanently. Its record keeps the deletion.`); nav('/products');
+                }}><Trash2 size={14} /> Delete permanently</button>
+              </>
+            ) : <span className="xs mute">{elig.why}. Change the period in Settings.</span>}
+          </div>
+        )}
+        {err && <p className="xs tone-bad" role="alert">{err}</p>}
+      </div>
+    );
+  }
+  if (w?.status === 'requested') {
+    return (
+      <div className="callout warn withdraw-box">
+        <div><b>Withdrawal requested {fmtDate(w.at)}{who(w) ? ` by ${who(w)}` : ''}.</b> {w.category}{w.replacedBy ? ` (${systems.find((x) => x.id === w.replacedBy)?.name || w.replacedBy})` : ''}: {w.reason}</div>
+        {['lead', 'admin'].includes(role) ? (
+          <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <label className="field" style={{ flex: 1, minWidth: 240 }}><span className="xs">Decision note (needed to refuse)</span><input className="input" value={comment} onChange={(e) => setComment(e.target.value)} /></label>
+            <button className="btn primary sm" onClick={() => { decideWithdrawal(s.id, true, comment); toast('Product withdrawn'); }}>Approve withdrawal</button>
+            <button className="btn sm" disabled={comment.trim().length < 5} onClick={() => { decideWithdrawal(s.id, false, comment); toast('Withdrawal refused'); }}>Refuse</button>
+          </div>
+        ) : <div className="xs" style={{ marginTop: 4 }}>Waiting for a governance lead or administrator.{CAN.work(role) && <> <button className="btn ghost sm" onClick={() => cancelWithdrawal(s.id)}>Cancel request</button></>}</div>}
+      </div>
+    );
+  }
+  if (!CAN.work(role)) return null;
+  if (!canWithdraw(s)) return null;
+  return (
+    <div className="withdraw-row">
+      {w?.status === 'rejected' && <p className="xs mute">A withdrawal was refused on {fmtDate(w.decidedAt)}{w.comment ? `: ${w.comment}` : ''}.</p>}
+      {!form ? (
+        <button className="btn ghost sm" onClick={() => setForm({ category: '', reason: '', replacedBy: '' })}><Trash2 size={14} /> Withdraw this product</button>
+      ) : (
+        <div className="panel fade-in" style={{ padding: 16 }}>
+          <b>Withdraw {s.name}</b>
+          <p className="small mute">For products that will not go ahead. A governance lead or administrator decides; the product is then archived, read-only, with its full record. Products already in production are retired through stage 10 instead.</p>
+          <div className="grid g2" style={{ gap: 10 }}>
+            <Field label="Why"><select className="input" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+              <option value="">Choose…</option>{WITHDRAW_REASONS.map((x) => <option key={x}>{x}</option>)}</select></Field>
+            {needsOther && <Field label="Which product"><select className="input" value={form.replacedBy} onChange={(e) => setForm({ ...form, replacedBy: e.target.value })}>
+              <option value="">Choose…</option>{others.map((x) => <option key={x.id} value={x.id}>{x.code} {x.name}</option>)}</select></Field>}
+          </div>
+          <Field label="Explain (at least 20 characters)"><textarea className="input" rows={3} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} /></Field>
+          <div className="row" style={{ gap: 8, marginTop: 8 }}>
+            <button className="btn sm" onClick={() => setForm(null)}>Cancel</button>
+            <button className="btn primary sm" disabled={!reasonOk} onClick={() => { requestWithdrawal(s.id, form); setForm(null); toast('Withdrawal requested'); }}>Request withdrawal</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Product({ id, nav, back }) {
   const { getSystem, state, role } = useStore();
   const [tab, setTab] = useState('lifecycle');
@@ -705,7 +788,7 @@ export default function Product({ id, nav, back }) {
   const open = s.actions.filter((x) => x.status !== 'Done').length;
   const rec = s.stages?.[s.stage];
   const mine = waitingOn(s).includes(role) || (role === 'lead' && waitingOn(s).includes('assessor'));
-  const yourTurn = (CAN.work(role) && ['open', 'returned'].includes(rec?.status) && !['Retired', 'Blocked'].includes(s.status)) || (CAN.review(role) && mine);
+  const yourTurn = (CAN.work(role) && ['open', 'returned'].includes(rec?.status) && !['Retired', 'Withdrawn', 'Blocked'].includes(s.status)) || (CAN.review(role) && mine && s.status !== 'Withdrawn');
   return (
     <div className="fade-in">
       <button className="btn ghost back" onClick={() => nav(back)}><ArrowLeft size={16} /> Back</button>
@@ -718,7 +801,7 @@ export default function Product({ id, nav, back }) {
           <div className="xs mute">Current stage</div>
           <div className="hero-stage-name"><span className="stage-chip">{s.stage}</span> {stageOf(s.stage).name}</div>
           <div className="row" style={{ gap: 8, marginTop: 6 }}>
-            <StatusPill status={s.status === 'Blocked' || s.status === 'Retired' ? s.status : STAGE_STATUS[rec?.status || 'open']} />
+            <StatusPill status={['Blocked', 'Retired', 'Withdrawn'].includes(s.status) ? s.status : STAGE_STATUS[rec?.status || 'open']} />
             <ProductDeadlines s={s} />
             {yourTurn && <span className="your-turn">{CAN.work(role) ? 'Your turn' : 'Needs your review'}</span>}
           </div>
@@ -728,6 +811,7 @@ export default function Product({ id, nav, back }) {
           <ReportMenu s={s} audit={state.audit.filter((x) => x.target === s.id)} client={client} />
         </div>
       </section>
+      <Withdrawal s={s} nav={nav} />
       <Tabs value={tab} onChange={setTab} tabs={[['lifecycle', 'Lifecycle'], ['overview', 'Risk and score'], ['assessment', 'Assessment'], ['data', 'Data and lineage'], ['actions', `Actions (${open})`], ['history', 'History'], ['record', 'Record']]} />
       <div key={tab} className="fade-in">
         {tab === 'overview' && <Results results={r} frameworks={s.assessment.frameworks} />}

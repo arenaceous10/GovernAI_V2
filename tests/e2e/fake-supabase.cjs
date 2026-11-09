@@ -260,6 +260,13 @@ function installRest(context, db) {
         // Like Postgres: INSERT ... ON CONFLICT DO UPDATE checks the proposed row against the INSERT policy too.
         if (upsert && existing && !canWrite(u, table, r, null, method)) return deny(r[key]);
         if (!canWrite(u, table, r, existing, method)) return deny(r[key]);
+        // Mirror of 008_withdrawal_guard.sql for people outside the governance team.
+        if (table === 'v2_products' && existing && !u.team) {
+          if (existing.data?.status === 'Withdrawn') return json(route, 400, { code: '42501', message: 'This product was withdrawn: only the governance team can change it' });
+          const ow = existing.data?.withdrawal; const nw = r.data?.withdrawal;
+          if (JSON.stringify(ow) !== JSON.stringify(nw) && (!nw || !['requested', 'cancelled'].includes(nw.status) || nw.decidedAt || nw.previousStatus)) return json(route, 400, { code: '42501', message: 'Only the governance team can decide a withdrawal' });
+          if (r.data?.status === 'Withdrawn') return json(route, 400, { code: '42501', message: 'Only the governance team can decide a withdrawal' });
+        }
       }
       for (const r of list) {
         const before = table === 'v2_products' ? rows.find((x) => x[key] === r[key]) : null;

@@ -1,6 +1,6 @@
 // Notifications, quick search (Ctrl/Cmd+K), toasts and the regulatory deadline radar.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Bell, CalendarClock, CheckCircle2, CornerDownLeft, Hourglass, Search, ShieldAlert, X } from 'lucide-react';
+import { Bell, CalendarClock, CheckCircle2, CornerDownLeft, Hourglass, Search, ShieldAlert, Trash2, X } from 'lucide-react';
 import { STAGES } from '../data/lifecycle.js';
 import { FRAMEWORKS } from '../data/frameworks.js';
 import { deadlineRadar, deadlinesFor, urgency } from '../data/deadlines.js';
@@ -35,7 +35,7 @@ export function Toaster() {
 // ---------- notifications: what the other side did on your products ----------
 const seenKey = (me, role) => `governai.seen.${me?.id || role}`;
 export function useNotifications() {
-  const { systems, role, me, state } = useStore();
+  const { systems, withdrawn: withdrawnList, role, me, state } = useStore();
   const [seen, setSeen] = useState(() => { try { return localStorage.getItem(seenKey(me, role)) || ''; } catch { return ''; } });
   useEffect(() => { try { setSeen(localStorage.getItem(seenKey(me, role)) || ''); } catch { /* ignore */ } }, [me, role]);
   const items = useMemo(() => {
@@ -51,6 +51,13 @@ export function useNotifications() {
     if (role === 'admin') {
       for (const u of state.users || []) if (u.status === 'pending') out.push({ at: u.createdAt || '', person: u, outcome: 'Waiting for approval' });
     }
+    // Withdrawal requests for those who decide them; decisions for the client.
+    for (const sy of [...systems, ...(withdrawnList || [])]) {
+      const w = sy.withdrawal;
+      if (!w) continue;
+      if (w.status === 'requested' && (role === 'lead' || role === 'admin')) out.push({ at: w.at, s: sy, withdraw: 'requested', comment: `${w.category}: ${w.reason}`, sticky: true });
+      if (['approved', 'rejected'].includes(w.status) && role === 'client') out.push({ at: w.decidedAt, s: sy, withdraw: w.status, comment: w.comment });
+    }
     // Reviews past the service level, for the people who can act on them. Shown as unread until decided.
     if (role === 'assessor' || role === 'lead' || role === 'admin') {
       const sla = Number(state.settings?.reviewSlaDays) || DEFAULT_SLA;
@@ -61,7 +68,7 @@ export function useNotifications() {
       }
     }
     return out.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 30);
-  }, [systems, role, state.users, state.settings]);
+  }, [systems, withdrawnList, role, state.users, state.settings]);
   const unread = items.filter((i) => (i.person || i.sticky ? true : String(i.at) > seen)).length;
   const markRead = () => { const now = new Date().toISOString(); try { localStorage.setItem(seenKey(me, role), now); } catch { /* ignore */ } setSeen(now); };
   return { items, unread, seen, markRead };
@@ -90,16 +97,16 @@ export function Notifications({ nav }) {
           {items.length === 0 ? <div className="notif-empty">Nothing yet. Decisions and submissions on your products appear here.</div> : (
             <ul>
               {items.map((i, k) => {
-                const Icon = ICON[i.outcome] || CheckCircle2;
+                const Icon = i.withdraw ? Trash2 : ICON[i.outcome] || CheckCircle2;
                 const fresh = i.person || i.sticky || String(i.at) > seen;
                 return (
                   <li key={k}>
                     <button type="button" className={fresh ? 'fresh' : ''} onClick={() => { setOpen(false); nav(i.person ? '/admin' : `/product/${i.s.id}`); }}>
-                      <span className={`ni ni-${i.outcome === 'Overdue' ? 'bad' : i.outcome === 'Returned' ? 'warn' : i.outcome === 'Submitted' || i.person ? 'info' : 'good'}`}><Icon size={14} /></span>
+                      <span className={`ni ni-${i.withdraw === 'requested' ? 'warn' : i.withdraw === 'rejected' ? 'info' : i.outcome === 'Overdue' ? 'bad' : i.outcome === 'Returned' ? 'warn' : i.outcome === 'Submitted' || i.person ? 'info' : 'good'}`}><Icon size={14} /></span>
                       <span className="nt">
-                        <span>{i.person ? <><b>{i.person.name}</b> is waiting for approval</> : <><b>{i.s.name}</b>: stage {i.n} {i.outcome === 'Overdue' ? 'review overdue' : i.outcome.toLowerCase()}</>}</span>
+                        <span>{i.person ? <><b>{i.person.name}</b> is waiting for approval</> : i.withdraw ? <><b>{i.s.name}</b>: {{ requested: 'withdrawal requested', approved: 'withdrawn', rejected: 'withdrawal refused' }[i.withdraw]}</> : <><b>{i.s.name}</b>: stage {i.n} {i.outcome === 'Overdue' ? 'review overdue' : i.outcome.toLowerCase()}</>}</span>
                         {i.comment && <span className="xs mute nc">{i.comment}</span>}
-                        <span className="xs mute">{i.person ? i.person.email : `${STAGES[i.n - 1]?.short} · ${fmtDate(i.at)}`}</span>
+                        <span className="xs mute">{i.person ? i.person.email : i.withdraw ? fmtDate(i.at) : `${STAGES[i.n - 1]?.short} · ${fmtDate(i.at)}`}</span>
                       </span>
                     </button>
                   </li>

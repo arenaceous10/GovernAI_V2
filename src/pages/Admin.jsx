@@ -455,6 +455,13 @@ export function AdminSettings() {
               <span className="small">working days</span>
             </label>
           </Panel>
+          <Panel title="Keeping deleted products" sub="Withdrawn and retired products stay archived, with their full record, for this many days before an administrator may delete them permanently. The tamper-evident record keeps the deletion either way.">
+            <label className="row" style={{ gap: 8 }}>
+              <input className="input" type="number" min={0} max={3650} style={{ width: 100 }} aria-label="Days to keep before permanent deletion" value={state.settings.purgeAfterDays ?? 30}
+                onChange={(e) => setSetting('purgeAfterDays', Math.max(0, Math.min(3650, parseInt(e.target.value, 10) || 0)))} />
+              <span className="small">days</span>
+            </label>
+          </Panel>
           <CutoffEditor />
           <Panel title="Demo data" sub="Data is stored in this browser only.">
             {confirm ? (
