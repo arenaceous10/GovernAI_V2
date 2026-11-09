@@ -14,10 +14,18 @@ export const CARD_FIELDS = [
 ];
 const TOTAL_W = CARD_FIELDS.reduce((a, f) => a + f.weight, 0) + 2; // + metrics, tags
 
+// The registry version whose metrics describe the product: the one marked champion (or in Production), else the newest.
+export function registryVersion(c) {
+  const vs = c?.versions || [];
+  return vs.find((v) => (v.aliases || []).some((a) => /champion|prod/i.test(a)) || /production/i.test(v.stage || '')) || vs[0] || null;
+}
+
 export function cardCompleteness(s) {
   const c = s.card || {};
   let w = CARD_FIELDS.reduce((a, f) => a + (String(c[f.k] || '').trim() ? f.weight : 0), 0);
-  if ((c.metrics || []).some((m) => m.name && m.value)) w += 1;
+  // Metrics count whether typed on the card or read from the connected registry.
+  const reg = registryVersion(s.connector)?.metrics;
+  if ((c.metrics || []).some((m) => m.name && m.value) || (reg && Object.keys(reg).length)) w += 1;
   if ((c.tags || []).length) w += 1;
   return Math.round((w / TOTAL_W) * 100);
 }

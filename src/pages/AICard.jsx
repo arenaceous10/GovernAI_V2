@@ -14,7 +14,7 @@ import { toast } from '../components/Extras.jsx';
 import { useStore, CAN } from '../store/store.jsx';
 import RegistryPanel, { GenAIPanel, MonitoringPanel } from '../components/Registry.jsx';
 
-import { CARD_FIELDS, cardCompleteness, cardStatus } from '../data/card.js';
+import { CARD_FIELDS, cardCompleteness, cardStatus, registryVersion } from '../data/card.js';
 export { CARD_FIELDS, cardCompleteness, cardStatus };
 
 const definitionOf = (s) => s.card?.summary || s.description;
@@ -74,14 +74,8 @@ function Attr({ label, children }) {
   return <div className="attr"><dt>{label}</dt><dd>{children || <span className="mute">Not documented</span>}</dd></div>;
 }
 
-// The registry version whose metrics describe the product: the one marked champion (or in Production), else the newest.
-function registryVersion(c) {
-  const vs = c?.versions || [];
-  return vs.find((v) => (v.aliases || []).some((a) => /champion|prod/i.test(a)) || /production/i.test(v.stage || '')) || vs[0] || null;
-}
-
 export default function AICardPage({ id, nav }) {
-  const { getSystem, systems, state, role, saveCard } = useStore();
+  const { getSystem, systems, state, role, saveCard, saveData, setProductOwner } = useStore();
   const s = getSystem(id);
   const [edit, setEdit] = useState(false);
   const [d, setD] = useState({});
@@ -105,8 +99,21 @@ export default function AICardPage({ id, nav }) {
   const stewards = [...new Set((s.datasets || []).map((x) => x.steward).filter(Boolean))];
   const ctl = controlStatus(s, state.settings.checklistRules || {});
   const versions = [...(c.versions || [])].reverse();
-  const start = () => { setD({ ...c, metrics: (c.metrics || []).map((m) => ({ ...m })), tags: [...(c.tags || [])] }); setEdit(true); };
-  const save = () => { saveCard(s.id, d); setEdit(false); toast('AI card saved'); };
+  const start = () => {
+    setD({ ...c, metrics: (c.metrics || []).map((m) => ({ ...m })), tags: [...(c.tags || [])],
+      _owner: s.owner || '', _stewards: Object.fromEntries((s.datasets || []).map((x) => [x.id, x.steward || ''])) });
+    setEdit(true);
+  };
+  // The card fields are versioned on the card; the business owner and the dataset stewards live on the product.
+  const save = () => {
+    const { _owner, _stewards, ...card } = d;
+    saveCard(s.id, card);
+    const owner = String(_owner || '').trim().slice(0, 80);
+    if (owner && owner !== s.owner) setProductOwner(s.id, owner);
+    const ds = (s.datasets || []).map((x) => ({ ...x, steward: String(_stewards?.[x.id] ?? x.steward ?? '').trim().slice(0, 80) }));
+    if (ds.some((x, i) => x.steward !== (s.datasets[i].steward || ''))) saveData(s.id, ds, s.outputs || []);
+    setEdit(false); toast('AI card saved');
+  };
   // Fills only empty fields, from the registry: description, model name, the version in use and its owner.
   const fillFromRegistry = () => {
     const con = s.connector; const rv = registryVersion(con); const info = con?.info || {};
@@ -253,7 +260,7 @@ export default function AICardPage({ id, nav }) {
               <Attr label="Type of AI">{systemTypeLabel(p.systemType, p.systemTypeOther)}</Attr>
               <Attr label="Sourcing">{selectionLabel(SOURCING, p.sourcing, p.sourcingOther)}</Attr>
               {edit ? (
-                <>{CARD_FIELDS.filter((x) => !x.rows).map((x) => <Field key={x.k} label={x.label} hint={x.hint}><input className="input" value={d[x.k] || ''} onChange={(e) => setD({ ...d, [x.k]: e.target.value })} /></Field>)}</>
+                <>{CARD_FIELDS.filter((x) => !x.rows && x.k !== 'modelOwner').map((x) => <Field key={x.k} label={x.label} hint={x.hint}><input className="input" value={d[x.k] || ''} onChange={(e) => setD({ ...d, [x.k]: e.target.value })} /></Field>)}</>
               ) : (
                 <><Attr label="Model or service">{c.modelName}</Attr><Attr label="Version in production">{c.modelVersion || (s.connector?.latest ? `${s.connector.latest} (latest in the registry)` : '')}</Attr></>
               )}
@@ -276,13 +283,27 @@ export default function AICardPage({ id, nav }) {
           </Panel>
 
           <Panel title={<span className="row" style={{ gap: 6 }}><Users size={15} /> People</span>}>
-            <dl className="attrs">
-              <Attr label="Business owner">{s.owner}</Attr>
-              <Attr label="Model owner">{edit ? null : c.modelOwner}</Attr>
-              <Attr label="Data stewards">{stewards.join(', ')}</Attr>
-              <Attr label="Organisation">{client?.name}</Attr>
-              <Attr label="Last approval">{lastApproval ? `${ROLES[lastApproval.k]?.name}, stage ${lastApproval.n}, ${fmtDate(lastApproval.at)}` : ''}</Attr>
-            </dl>
+            {edit ? (
+              <div className="stack">
+                <Field label="Business owner" hint="The person accountable for the use case."><input className="input" value={d._owner || ''} onChange={(e) => setD({ ...d, _owner: e.target.value })} /></Field>
+                <Field label="Model owner" hint="Technical owner, if different from the business owner."><input className="input" value={d.modelOwner || ''} onChange={(e) => setD({ ...d, modelOwner: e.target.value })} /></Field>
+                <div>
+                  <div className="small" style={{ fontWeight: 500, marginBottom: 4 }}>Data stewards</div>
+                  {(s.datasets || []).length === 0 ? <p className="xs mute">Link datasets in the product's Data tab first; each dataset has its own steward.</p> : s.datasets.map((x) => (
+                    <Field key={x.id} label={x.name}><input className="input" placeholder="Steward's name or email" value={d._stewards?.[x.id] || ''} onChange={(e) => setD({ ...d, _stewards: { ...d._stewards, [x.id]: e.target.value } })} /></Field>
+                  ))}
+                </div>
+                <p className="xs mute">Organisation and last approval are filled in by GovernAI from the client record and the lifecycle approvals.</p>
+              </div>
+            ) : (
+              <dl className="attrs">
+                <Attr label="Business owner">{s.owner}</Attr>
+                <Attr label="Model owner">{c.modelOwner}</Attr>
+                <Attr label="Data stewards">{stewards.join(', ')}</Attr>
+                <Attr label="Organisation">{client?.name}</Attr>
+                <Attr label="Last approval">{lastApproval ? `${ROLES[lastApproval.k]?.name}, stage ${lastApproval.n}, ${fmtDate(lastApproval.at)}` : ''}</Attr>
+              </dl>
+            )}
           </Panel>
 
           <Panel title="Controls">

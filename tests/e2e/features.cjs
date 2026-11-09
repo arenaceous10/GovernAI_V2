@@ -56,8 +56,14 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
     assert((await body()).includes('Card completeness'), 'card page');
     await p.getByRole('button', { name: /Edit card/ }).click();
     await p.getByLabel('Known limitations').fill('Not validated for applicants over 75.');
-    await p.getByRole('button', { name: 'Save card' }).click(); await W(700);
+    await p.getByLabel(/^Business owner/).fill('Priya Nair');
+    await p.getByLabel(/^Model owner/).fill('ml-team@example.com');
+    await p.getByLabel(/^Medical disclosures/).fill('A. Bose');
+    await p.getByRole('button', { name: 'Save card' }).click(); await W(900);
     assert(row('sys-2').card?.limitations === 'Not validated for applicants over 75.' && row('sys-2').card.version === 1, 'card saved with version');
+    assert(row('sys-2').owner === 'Priya Nair' && row('sys-2').card.modelOwner === 'ml-team@example.com', 'owners saved from the People panel');
+    assert(row('sys-2').datasets.find((x) => x.id === 'medical-disclosures-underwriting-portal').steward === 'A. Bose', 'steward saved from the People panel');
+    assert((await body()).includes('A. Bose') && (await body()).includes('Priya Nair'), 'People panel shows the edits');
     await p.goto(URL + '#cards'); await W(500);
     assert(await p.locator('.glossary-row').count() >= 3, 'registry lists the cards');
 

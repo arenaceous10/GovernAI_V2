@@ -540,6 +540,7 @@ export function StoreProvider({ children, standalone = null }) {
       updateAction: (id, actionId, patch) => CAN.work(state.role) && updateSystem(id, (x) => ({
         ...x, actions: x.actions.map((a) => (a.id === actionId ? { ...a, ...patch } : a)),
       }), 'Action updated', Object.entries(patch).map(([k, v]) => `${k}: ${v}`).join(', ')),
+      setProductOwner: (id, owner) => CAN.work(state.role) && updateSystem(id, (x) => ({ ...x, owner }), 'Business owner changed', owner),
       saveData: (id, datasets, outputs) => CAN.work(state.role) && updateSystem(id, (x) => ({ ...x, datasets, outputs }), 'Data assets updated', `${datasets.length} datasets`),
 
       // ----- admin -----

@@ -50,3 +50,10 @@ test('document packs fill from product data and mark gaps', () => {
   const doc = JSON.stringify(annexIV(withSecrets, { client }));
   assert.doesNotMatch(doc, /SECRET/); assert.match(doc, /auc 0.9 \(registry, version 4\)/);
 });
+
+test('card completeness counts metrics read from the connected registry', async () => {
+  const { cardCompleteness } = await import('../src/data/card.js');
+  const base = { card: { summary: 'x' } };
+  const withReg = { ...base, connector: { versions: [{ version: '3', aliases: ['champion'], metrics: { auc: 0.79 } }] } };
+  assert.ok(cardCompleteness(withReg) > cardCompleteness(base));
+});
