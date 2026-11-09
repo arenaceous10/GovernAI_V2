@@ -270,7 +270,11 @@ export async function readTables({ base, token, tables, warehouseId }, { fetchIm
         `SELECT source_table_full_name, target_table_full_name, max(event_time) AS last_seen FROM system.access.table_lineage
          WHERE (target_table_full_name IN (${list}) OR source_table_full_name IN (${list})) AND event_time >= current_date() - INTERVAL 365 DAYS
          GROUP BY source_table_full_name, target_table_full_name LIMIT 500`, params);
-    } catch (e) { lineageNote = `Lineage system table: ${e.message}`; }
+    } catch (e) {
+      const m = e.message.match(/Principal '([^']+)' does not have ([A-Z ]+) on (Catalog|Schema|Table) '([^']+)'/);
+      lineageNote = m ? `The lineage system table is not readable (${m[1]} has no ${m[2]} on ${m[3].toLowerCase()} ${m[4]}), so lineage came from Databricks' lineage endpoint instead`
+        : `The lineage system table is not readable (${e.message}), so lineage came from Databricks' lineage endpoint instead`;
+    }
   }
   const one = async (name) => {
     const t = await tableInfo(fetchImpl, base, token, name);
