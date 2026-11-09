@@ -9,7 +9,8 @@
     "build:single": "vite build --mode single",
     "preview": "vite preview",
     "test": "node --test tests/engine.test.js tests/sync.test.js tests/features.test.js tests/guard.test.js tests/proof.test.js tests/ops.test.js",
-    "test:db": "node --test tests/db/rls.test.mjs"
+    "test:db": "node --test tests/db/rls.test.mjs",
+    "test:fuzz": "sh tests/fuzz/build-harness.sh && node tests/fuzz/run-all.mjs"
   },
   "dependencies": {
     "@fontsource/dm-sans": "^5.3.0",
@@ -25,6 +26,7 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.15",
     "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^25.0.1",
     "vite": "^5.4.11",
     "vite-plugin-singlefile": "^2.0.3"
   }

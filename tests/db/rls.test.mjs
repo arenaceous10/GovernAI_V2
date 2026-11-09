@@ -24,7 +24,7 @@ const U = { a: '00000000-0000-0000-0000-00000000000a', b: '00000000-0000-0000-00
 async function setup() {
   const db = new PGlite();
   await db.exec(PRELUDE);
-  for (const f of ['001_governai_v2.sql', '002_evidence_files.sql', '003_auth_rbac.sql', '004_ai_usage.sql', '005_security_fixes.sql', '006_function_privileges.sql', '007_ledger_and_ops.sql', '008_withdrawal_guard.sql']) await db.exec(MIG(f));
+  for (const f of ['001_governai_v2.sql', '002_evidence_files.sql', '003_auth_rbac.sql', '004_ai_usage.sql', '005_security_fixes.sql', '006_function_privileges.sql', '007_ledger_and_ops.sql', '008_withdrawal_guard.sql', '009_test_sweep_fixes.sql']) await db.exec(MIG(f));
   await db.exec(`grant select, insert, update, delete on all tables in schema public to anon, authenticated;
     revoke insert, update, delete on public.v2_ai_usage from anon, authenticated;
     revoke insert, update, delete on public.v2_ledger from anon, authenticated;`);
@@ -285,4 +285,38 @@ test('clients ask to withdraw; only the governance team decides, and a withdrawn
   await as(db, U.admin, `delete from public.v2_products where id = 'pw'`);
   assert.equal(await read(db, 'pw'), undefined);
   assert.equal(entries(await ledger(db, 'pw')).at(-1).kind, 'deleted');
+});
+
+test('test sweep fixes: unblocking a live product, retired products, closed rounds and repeated entries', async () => {
+  const { db, orgA } = await setup();
+  const done = (o = {}) => stage({ status: 'approved', approvals: { assessor: { outcome: 'Approved' } }, ...o });
+  const live = product('lv', orgA, { status: 'Blocked', stage: 7, nextReview: '2027-01-01', stages: { 6: done({ log: [{ who: 'assessor', outcome: 'Approved', at: 't6' }] }), 7: stage() } });
+  await upsert(db, U.admin, live);
+  await fails(upsert(db, U.a, { ...live, status: 'Active' }), /governance team/);
+  await upsert(db, U.a, { ...live, status: 'In production' });
+  assert.equal((await read(db, 'lv')).status, 'In production', 'a re-assessment that lifts the block puts a live product back in production');
+  // without an approved go-live (stage 6), Blocked cannot become In production, even when the record is missing
+  const nolive = product('nl', orgA, { status: 'Blocked', stage: 9, nextReview: '2027-01-01', stages: { 9: stage() } });
+  await upsert(db, U.admin, nolive);
+  await fails(upsert(db, U.a, { ...nolive, status: 'In production' }), /governance team/);
+  // retired: frozen for clients
+  const ret = product('rt', orgA, { status: 'Retired', stage: 10, nextReview: null, stages: { 10: done() } });
+  await upsert(db, U.admin, ret);
+  await fails(upsert(db, U.a, { ...ret, card: { summary: 'late edit' } }), /retired/);
+  // a change round: the event stage starts again, the old record is kept in rounds and is not reported as removed
+  const p = { ...live, status: 'In production', stages: { ...live.stages, 8: done({ log: [{ who: 'client', outcome: 'Submitted', at: 's1' }, { who: 'assessor', outcome: 'Approved', at: 'a1' }] }) } };
+  await upsert(db, U.admin, p);
+  await upsert(db, U.a, { ...p, stage: 8, rounds: [{ stage: 8, record: p.stages[8] }], stages: { ...p.stages, 8: stage() } });
+  const rows = (await db.query(`select kind, body from public.v2_ledger where chain = 'lv' order by seq`)).rows;
+  assert.ok(!rows.some((x) => x.kind === 'decision-removed'), 'a closed round is not a removal');
+  // dropping the entries instead is still recorded
+  await upsert(db, U.admin, { ...p, stage: 7 });
+  await upsert(db, U.admin, { ...p, stage: 7, stages: { ...p.stages, 8: stage() } });
+  const rows2 = (await db.query(`select kind from public.v2_ledger where chain = 'lv' order by seq`)).rows;
+  assert.equal(rows2.filter((x) => x.kind === 'decision-removed').length, 2, 'dropped entries are recorded as removed');
+  // two identical entries are two entries in the record
+  const dup = product('dp', orgA, { status: 'Active', stages: { 1: stage({ log: [{ who: 'client', outcome: 'Submitted' }, { who: 'client', outcome: 'Submitted' }] }) } });
+  await upsert(db, U.admin, dup);
+  const d = (await db.query(`select count(*)::int as n from public.v2_ledger where chain = 'dp' and kind = 'decision'`)).rows[0].n;
+  assert.equal(d, 2);
 });

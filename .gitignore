@@ -6,3 +6,4 @@ dist-single
 .vercel
 e2e-shots
 dist-cloud
+tests/fuzz/.harness.mjs

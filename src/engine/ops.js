@@ -9,11 +9,13 @@ const APPROVED = ['Approved', 'Approved with conditions', 'Overridden'];
 export function workingDays(aIso, bIso) {
   const a = new Date(aIso).getTime(); const b = new Date(bIso).getTime();
   if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return 0;
+  // Walk calendar days (UTC), counting only the part of each weekday that falls between a and b.
   let days = 0;
-  for (let t = a; t < b; t += DAY) {
-    const step = Math.min(DAY, b - t);
+  for (let t = a; t < b;) {
+    const end = Math.min(b, (Math.floor(t / DAY) + 1) * DAY);
     const wd = new Date(t).getUTCDay();
-    if (wd !== 0 && wd !== 6) days += step / DAY;
+    if (wd !== 0 && wd !== 6) days += (end - t) / DAY;
+    t = end;
   }
   return Math.round(days * 10) / 10;
 }
@@ -30,7 +32,7 @@ export function reviewTimers(systems, { sla = DEFAULT_SLA, now = new Date().toIS
   const out = [];
   for (const s of systems) {
     const rec = s.stages?.[s.stage];
-    if (!s.assessment || rec?.status !== 'submitted' || ['Retired', 'Draft'].includes(s.status)) continue;
+    if (!s.assessment || rec?.status !== 'submitted' || ['Retired', 'Draft', 'Withdrawn', 'Blocked'].includes(s.status)) continue;
     const at = rec.submittedAt || [...(rec.log || [])].reverse().find((e) => e.outcome === 'Submitted')?.at;
     if (!at) continue;
     const days = workingDays(at, now);

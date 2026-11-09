@@ -59,10 +59,11 @@ export function compareWithProduct(rows, product) {
     if (e.kind === 'decision-removed') { bump(String(e.data?.stage), stable(e.data?.entry), -1); removed.push(e); }
   }
   const unrecorded = []; const missing = [];
-  const seenStages = new Set([...live.keys(), ...Object.keys(product?.stages || {})]);
+  const seenStages = new Set([...live.keys(), ...Object.keys(product?.stages || {}), ...(product?.rounds || []).map((rd) => String(rd.stage))]);
   for (const st of seenStages) {
     const want = new Map(live.get(st) || []);
-    for (const entry of product?.stages?.[st]?.log || []) {
+    const archived = (product?.rounds || []).filter((rd) => String(rd.stage) === String(st)).flatMap((rd) => rd.record?.log || []);
+    for (const entry of [...archived, ...(product?.stages?.[st]?.log || [])]) {
       const t = stable(entry);
       if ((want.get(t) || 0) > 0) want.set(t, want.get(t) - 1); else unrecorded.push({ stage: st, entry });
     }
@@ -84,6 +85,7 @@ export async function localLedger(product) {
   await add(product.createdAt || new Date(0).toISOString(), 'registered', { name: product.name, code: product.code, status: product.status, stage: product.stage });
   const all = [];
   for (const [st, rec] of Object.entries(product.stages || {})) for (const entry of rec.log || []) all.push({ st, entry });
+  for (const rd of product.rounds || []) for (const entry of rd.record?.log || []) all.push({ st: String(rd.stage), entry });
   all.sort((a, b) => String(a.entry.at).localeCompare(String(b.entry.at)));
   for (const { st, entry } of all) await add(entry.at || '', 'decision', { stage: st, entry });
   return rows;
@@ -92,12 +94,12 @@ export async function localLedger(product) {
 // What goes into a pack about the product: everything except file contents and secrets.
 export function packSnapshot(p) {
   const strip = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([k]) => !['data', 'url'].includes(k))) : v);
-  const stages = Object.fromEntries(Object.entries(p.stages || {}).map(([n, r]) => [n, {
-    ...r, evidence: Object.fromEntries(Object.entries(r.evidence || {}).map(([k, v]) => [k, strip(v)])),
-  }]));
+  const clean = (r) => ({ ...r, evidence: Object.fromEntries(Object.entries(r?.evidence || {}).map(([k, v]) => [k, strip(v)])) });
+  const stages = Object.fromEntries(Object.entries(p.stages || {}).map(([n, r]) => [n, clean(r)]));
+  const rounds = p.rounds ? p.rounds.map((rd) => ({ ...rd, record: clean(rd.record) })) : undefined;
   const card = p.card ? { ...p.card, versions: undefined } : undefined;
   const connector = p.connector ? { kind: p.connector.kind, host: p.connector.host, model: p.connector.model, versions: p.connector.versions, lastSync: p.connector.lastSync } : undefined;
-  return { ...p, stages, card, connector };
+  return { ...p, stages, rounds, card, connector };
 }
 
 // The text that is signed: the pack without its signature, keys sorted.

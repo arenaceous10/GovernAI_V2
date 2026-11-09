@@ -22,9 +22,10 @@ function stageEvidence(s, n) {
   if (!st || !rec) return '';
   const done = (st.checklist || []).filter((i) => rec.checklist?.[i]);
   const skipped = Object.entries(rec.skipped || {}).map(([i, v]) => `${i} (skipped: ${t(v.reason)})`);
-  const files = Object.values(rec.evidence || {}).map((v) => t(v?.name || v?.url || (typeof v === 'string' ? v : ''))).filter(Boolean);
+  // Evidence is saved as { file, ref, path } (older records may hold name/url or a plain string).
+  const files = Object.values(rec.evidence || {}).map((v) => t(v?.file || v?.ref || v?.name || v?.url || (typeof v === 'string' ? v : ''))).filter(Boolean);
   if (!done.length && !skipped.length && !files.length && rec.status !== 'approved') return '';
-  const status = { approved: 'approved', submitted: 'submitted for review', returned: 'returned for changes', open: 'in progress' }[rec.status] || rec.status;
+  const status = { approved: 'approved', submitted: 'submitted for review', returned: 'returned for changes', open: 'in progress' }[rec.status || 'open'] || 'in progress';
   const parts = [`Stage ${n}, ${st.name}: ${status}${rec.approvedAt ? ` on ${dt(rec.approvedAt)}` : ''}. ${done.length} of ${(st.checklist || []).length} checks done.`];
   if (done.length) parts.push(`Done: ${done.join('; ')}.`);
   if (skipped.length) parts.push(`Skipped: ${skipped.join('; ')}.`);

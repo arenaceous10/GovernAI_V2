@@ -11,7 +11,7 @@
 const PATTERNS = [
   ['[email]', /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi],
   ['[link]', /\b(?:https?:\/\/|www\.)[^\s<>"')]*[^\s<>"').,;:!?]/gi],
-  ['[secret]', /\b(?:sk|pk|rk|ghp|gho|xox[abp]|AKIA|AIza|sb_secret|sb_publishable|eyJ)[A-Za-z0-9_\-.]{12,}/g],
+  ['[secret]', /\b(?:sk|pk|rk|ghp|gho|xox[abp]|akia|aiza|sb_secret|sb_publishable|eyj)(?=[a-z_\-.]*\d)[a-z0-9_\-.]{12,}/gi],
   ['[ip address]', /\b(?:\d{1,3}\.){3}\d{1,3}\b/g],
   ['[iban]', /\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,4})?\b/g],
   ['[card number]', /\b(?:\d[ -]?){13,19}\b/g],
@@ -26,7 +26,8 @@ const PATTERNS = [
   ['[handle]', /(^|\s)@[A-Za-z0-9_]{3,}/g],
 ];
 // Titles followed by capitalised words are treated as a person's name.
-const TITLED = /\b(?:Mr|Mrs|Ms|Miss|Dr|Prof|Shri|Smt|Sri)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}/g;
+// An all-capitals title needs its full stop ("DR. RAVI KUMAR"), so "MS Teams" or "DR site" are left alone.
+const TITLED = /\b(?:Mr|Mrs|Ms|Miss|Dr|Prof|Shri|Smt|Sri)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}|\b(?:MR|MRS|MS|MISS|DR|PROF|SHRI|SMT|SRI)\.\s*[A-Z]{2,}(?:\s+[A-Z]{2,}){0,2}/g;
 
 const escapeRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -73,5 +74,5 @@ export const safeAvoid = (xs) => (Array.isArray(xs) ? xs.slice(0, 120).map((x) =
 // Fails closed: true when text still looks like it holds something identifying.
 export function looksSensitive(text) {
   const t = fold(text);
-  return PATTERNS.some(([, re]) => { re.lastIndex = 0; const hit = re.test(t); re.lastIndex = 0; return hit; }) || /\b(?:Mr|Mrs|Ms|Dr)\.?\s+[A-Z][a-z]+/.test(t);
+  return PATTERNS.some(([, re]) => { re.lastIndex = 0; const hit = re.test(t); re.lastIndex = 0; return hit; }) || /\b(?:Mr|Mrs|Ms|Dr)\.?\s+[A-Z][a-z]+|\b(?:MR|MRS|MS|DR)\.\s*[A-Z]{2,}/.test(t);
 }

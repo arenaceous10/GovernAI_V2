@@ -7,7 +7,10 @@
 // 2 MB per response. CONNECTOR_ALLOW_LOCAL=1 (tests only) allows http://localhost.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import { lookup as lookupCb } from 'node:dns';
+import { isIP, BlockList } from 'node:net';
+import { request as httpsRequest } from 'node:https';
+import { request as httpRequest } from 'node:http';
 
 export const KINDS = { mlflow: 'MLflow model registry', 'databricks-uc': 'Databricks Unity Catalog' };
 
@@ -28,11 +31,16 @@ export function unseal(sealed, productId, keyB64) {
   return Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString('utf8');
 }
 
-const PRIVATE = [
-  /^0\./, /^10\./, /^127\./, /^169\.254\./, /^172\.(1[6-9]|2\d|3[01])\./, /^192\.168\./, /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./,
-  /^192\.0\.0\./, /^198\.1[89]\./, /^2(2[4-9]|3\d|[4-5]\d)\./, /^::1?$/, /^f[cd]/i, /^fe[89ab]/i, /^::ffff:(0|10|127|169\.254|172\.(1[6-9]|2\d|3[01])|192\.168)\./i,
-];
-const isPrivate = (ip) => PRIVATE.some((re) => re.test(ip));
+// Addresses GovernAI never calls. BlockList also matches IPv4-mapped IPv6 forms such as ::ffff:7f00:1 (127.0.0.1),
+// which a URL parser produces from [::ffff:127.0.0.1] and which a text pattern would miss.
+const BLOCKED = new BlockList();
+for (const [a, n] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
+  ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 3]]) BLOCKED.addSubnet(a, n, 'ipv4');
+for (const [a, n] of [['::', 127], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['2002::', 16], ['2001::', 32], ['2001:db8::', 32], ['100::', 64]]) BLOCKED.addSubnet(a, n, 'ipv6');
+export const isPrivate = (ip) => {
+  const v = isIP(String(ip || ''));
+  return !v || BLOCKED.check(ip, v === 6 ? 'ipv6' : 'ipv4');
+};
 
 // Returns a clean base URL, or throws with a message fit for the user.
 export async function checkHost(input, { allowLocal = false, resolve = lookup } = {}) {
@@ -51,6 +59,37 @@ export async function checkHost(input, { allowLocal = false, resolve = lookup } 
   return `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
 }
 
+// fetch() replacement for registry calls. The address is resolved and checked on every connection, so a name that
+// passed checkHost cannot be re-pointed at a private address afterwards (DNS rebinding). Never follows redirects;
+// stops reading past 2 MB.
+const MAX_BYTES = 2_000_000;
+export function safeFetch(url, { method = 'GET', headers = {}, body, signal } = {}, { allowLocal = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const local = allowLocal && u.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(u.hostname);
+    if (u.protocol !== 'https:' && !local) { reject(new Error('Only https addresses are allowed')); return; }
+    const guardLookup = (host, opts, cb) => lookupCb(host, { ...opts, all: true }, (err, addrs) => {
+      if (err) { cb(err); return; }
+      const list = Array.isArray(addrs) ? addrs : [{ address: addrs, family: opts?.family || 4 }];
+      if (!local && list.some((a) => isPrivate(a.address))) { cb(new Error('That address is on a private network, which GovernAI cannot reach')); return; }
+      if (opts?.all) cb(null, list); else cb(null, list[0].address, list[0].family);
+    });
+    const req = (local ? httpRequest : httpsRequest)(u, { method, headers, lookup: guardLookup, signal }, (res) => {
+      let size = 0; const chunks = [];
+      res.on('data', (c) => { size += c.length; if (size > MAX_BYTES) { req.destroy(new Error('The registry response was too large')); return; } chunks.push(c); });
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve({ status: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, text: async () => text });
+      });
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+const defaultFetch = (url, init) => safeFetch(url, init, { allowLocal: process.env.CONNECTOR_ALLOW_LOCAL === '1' });
+
 async function getJson(fetchImpl, url, token, { body, timeout = 8000, notFound = 'The model was not found in the registry' } = {}) {
   const r = await fetchImpl(url, {
     method: body ? 'POST' : 'GET',
@@ -64,14 +103,18 @@ async function getJson(fetchImpl, url, token, { body, timeout = 8000, notFound =
   if (!r.ok) throw new Error(`The registry answered with an error (HTTP ${r.status})`);
   const text = await r.text();
   if (text.length > 2_000_000) throw new Error('The registry response was too large');
-  try { return JSON.parse(text); } catch { throw new Error('The registry did not return JSON'); }
+  let j;
+  try { j = JSON.parse(text); } catch { throw new Error('The registry did not return JSON'); }
+  if (!j || typeof j !== 'object' || Array.isArray(j)) throw new Error('The registry returned an answer GovernAI does not recognise');
+  return j;
 }
 
+const arr = (v) => (Array.isArray(v) ? v : []);
 const num = (v) => (Number.isFinite(+v) ? +v : null);
 const iso = (ms) => (num(ms) != null ? new Date(+ms).toISOString() : null);
 
 // Reads up to 50 versions, newest first, with metrics for the newest 3. Returns { model, versions, latest }.
-export async function readRegistry({ kind, host, model, token }, { fetchImpl = fetch, allowLocal = false, resolve } = {}) {
+export async function readRegistry({ kind, host, model, token }, { fetchImpl = defaultFetch, allowLocal = false, resolve } = {}) {
   if (!KINDS[kind]) throw new Error('Choose MLflow or Databricks Unity Catalog');
   const name = String(model || '').trim();
   if (!name || name.length > 200 || /[\s'"\\]/.test(name)) throw new Error('Enter the registered model name exactly as it appears in the registry');
@@ -86,9 +129,9 @@ export async function readRegistry({ kind, host, model, token }, { fetchImpl = f
     ]);
     const rm = m.registered_model || {};
     info = { description: String(rm.description || '').slice(0, 1000), owner: '', createdBy: String(rm.user_id || '').slice(0, 200) };
-    versions = (j.model_versions || []).map((v) => ({
+    versions = arr(j.model_versions).filter((v) => v && typeof v === 'object').map((v) => ({
       version: String(v.version), createdAt: iso(v.creation_timestamp), status: v.status || '', stage: v.current_stage || '',
-      aliases: v.aliases || [], runId: v.run_id || '', description: String(v.description || '').slice(0, 500), source: String(v.source || '').slice(0, 300),
+      aliases: arr(v.aliases).map(String), runId: v.run_id || '', description: String(v.description || '').slice(0, 500), source: String(v.source || '').slice(0, 300),
     }));
   } else {
     if (name.split('.').length !== 3) throw new Error('Unity Catalog models are named catalog.schema.model');
@@ -98,9 +141,9 @@ export async function readRegistry({ kind, host, model, token }, { fetchImpl = f
       getJson(fetchImpl, `${base}/api/2.1/unity-catalog/models/${path}?include_aliases=true`, token).catch(() => ({})),
     ]);
     const al = {};
-    for (const a of m.aliases || []) (al[String(a.version_num)] ||= []).push(a.alias_name);
+    for (const a of arr(m.aliases)) (al[String(a.version_num)] ||= []).push(a.alias_name);
     info = { description: String(m.comment || '').slice(0, 1000), owner: String(m.owner || '').slice(0, 200), createdBy: String(m.created_by || '').slice(0, 200) };
-    versions = (j.model_versions || []).map((v) => ({
+    versions = arr(j.model_versions).filter((v) => v && typeof v === 'object').map((v) => ({
       version: String(v.version), createdAt: iso(v.created_at), status: v.status || '', stage: '',
       aliases: al[String(v.version)] || [], runId: v.run_id || '', description: String(v.comment || '').slice(0, 500), source: String(v.source || '').slice(0, 300),
     }));
@@ -110,7 +153,7 @@ export async function readRegistry({ kind, host, model, token }, { fetchImpl = f
     if (!v.runId || !/^[A-Za-z0-9_-]{1,64}$/.test(v.runId)) continue;
     try {
       const r = await getJson(fetchImpl, `${base}/api/2.0/mlflow/runs/get?run_id=${encodeURIComponent(v.runId)}`, token);
-      v.metrics = Object.fromEntries((r.run?.data?.metrics || []).slice(0, 30).map((x) => [String(x.key).slice(0, 60), num(x.value)]).filter(([, x]) => x != null));
+      v.metrics = Object.fromEntries(arr(r.run?.data?.metrics).filter((x) => x && x.key != null).slice(0, 30).map((x) => [String(x.key).slice(0, 60), num(x.value)]).filter(([, x]) => x != null));
       if (r.run?.info?.experiment_id) v.experimentId = String(r.run.info.experiment_id).slice(0, 40);
     } catch { v.metrics = {}; }
   }
@@ -135,7 +178,7 @@ async function experimentId(fetchImpl, base, token, wanted, versions) {
   return versions.find((v) => v.experimentId)?.experimentId || null;
 }
 
-export async function readGenAI({ base, token, experiment, versions = [] }, { fetchImpl = fetch } = {}) {
+export async function readGenAI({ base, token, experiment, versions = [] }, { fetchImpl = defaultFetch } = {}) {
   const out = { experimentId: null, evaluations: [], traces: null, notes: [] };
   try { out.experimentId = await experimentId(fetchImpl, base, token, experiment, versions); } catch (e) { out.notes.push(e.message); return out; }
   if (!out.experimentId) { out.notes.push('No experiment found: set one, or register a model version that came from a run'); return out; }
@@ -151,13 +194,13 @@ export async function readGenAI({ base, token, experiment, versions = [] }, { fe
     })(),
   ]);
   if (runs.status === 'fulfilled') {
-    out.evaluations = (runs.value.runs || []).map((r) => ({
+    out.evaluations = arr(runs.value.runs).filter((r) => r && typeof r === 'object').map((r) => ({
       runId: String(r.info?.run_id || '').slice(0, 64), name: String(r.info?.run_name || '').slice(0, 120), at: iso(r.info?.start_time),
-      metrics: Object.fromEntries((r.data?.metrics || []).filter((m) => EVAL_METRIC.test(m.key)).slice(0, 20).map((m) => [String(m.key).slice(0, 60), num(m.value)]).filter(([, v]) => v != null)),
+      metrics: Object.fromEntries(arr(r.data?.metrics).filter((m) => m && EVAL_METRIC.test(m.key)).slice(0, 20).map((m) => [String(m.key).slice(0, 60), num(m.value)]).filter(([, v]) => v != null)),
     })).filter((r) => Object.keys(r.metrics).length).slice(0, 10);
   } else out.notes.push('Evaluation runs could not be read');
   if (traces.status === 'fulfilled') {
-    const list = traces.value.traces || [];
+    const list = arr(traces.value.traces);
     const info = (t) => t.trace_info || t.info || t;
     const at = (t) => num(info(t).timestamp_ms) ?? (info(t).request_time ? Date.parse(info(t).request_time) : null);
     const state = (t) => String(info(t).status || info(t).state || '').toUpperCase();
@@ -190,8 +233,8 @@ async function sql(fetchImpl, base, token, warehouseId, statement, parameters = 
     if (/TABLE_OR_VIEW_NOT_FOUND/.test(msg)) throw new Error('The metrics table does not exist yet: wait for the monitor\'s first refresh to finish');
     throw new Error(msg ? `SQL: ${msg.slice(0, 300)}` : `SQL did not finish (${j.status?.state || 'unknown'})`);
   }
-  const cols = (j.manifest?.schema?.columns || []).map((c) => c.name);
-  return (j.result?.data_array || []).map((row) => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
+  const cols = arr(j.manifest?.schema?.columns).map((c) => c?.name);
+  return arr(j.result?.data_array).filter(Array.isArray).map((row) => Object.fromEntries(cols.map((c, i) => [c, row[i]])));
 }
 const parseMaybe = (v) => { if (typeof v !== 'string') return v; try { return JSON.parse(v); } catch { return v; } };
 const pick = (v, keys) => { const o = parseMaybe(v); if (o && typeof o === 'object') { for (const k of keys) if (num(o[k]) != null) return num(o[k]); return null; } return num(o); };
@@ -215,7 +258,7 @@ async function monitorOf(fetchImpl, base, token, name, tableId) {
 // or a Kolmogorov-Smirnov test p-value below 0.05. These are common rules of thumb, not regulatory limits.
 export const DRIFT = { js: 0.1, psi: 0.2, ksP: 0.05 };
 
-export async function readMonitoring({ base, token, table, warehouseId }, { fetchImpl = fetch } = {}) {
+export async function readMonitoring({ base, token, table, warehouseId }, { fetchImpl = defaultFetch } = {}) {
   const name = String(table || '').trim();
   if (!validTable(name)) throw new Error('The monitored table must be named catalog.schema.table');
   const out = { table: name, monitor: null, drift: null, performance: null, notes: [] };
@@ -235,17 +278,28 @@ export async function readMonitoring({ base, token, table, warehouseId }, { fetc
     const rows = dr.value;
     const end = (r) => (parseMaybe(r.window) || {}).end || r.window_end || null;
     const latest = rows.length ? end(rows[0]) : null;
-    const cur = rows.filter((r) => end(r) === latest && (!r.slice_key || r.slice_key === 'null'));
+    let cur = rows.filter((r) => end(r) === latest && (!r.slice_key || r.slice_key === 'null'));
+    // The metrics table repeats each column per granularity and per model id: keep one granularity and the
+    // all-models rows (model_id '*') when present, so a column is counted once.
+    const gran = cur.find((r) => r.granularity)?.granularity;
+    if (gran) cur = cur.filter((r) => !r.granularity || r.granularity === gran);
+    if (cur.some((r) => r.model_id === '*')) cur = cur.filter((r) => r.model_id === '*');
+    else { const mid = cur.find((r) => r.model_id != null)?.model_id; if (mid != null) cur = cur.filter((r) => r.model_id == null || r.model_id === mid); }
+    const tsCol = m.inference_log?.timestamp_col || m.time_series?.timestamp_col || m.inference_log?.timestamp_column || m.time_series?.timestamp_column || '';
+    const seenCol = new Set();
+    cur = cur.filter((r) => r.column_name !== tsCol && r.column_name !== ':table' && !seenCol.has(`${r.column_name}|${r.drift_type}`) && seenCol.add(`${r.column_name}|${r.drift_type}`));
     const cols = cur.map((r) => ({
       column: String(r.column_name).slice(0, 120), type: String(r.drift_type || '').slice(0, 20),
       js: num(r.js_distance), psi: num(r.population_stability_index), ksP: pick(r.ks_test, ['pvalue', 'p_value']),
     }));
     const drifted = cols.filter((c) => (c.js != null && c.js > DRIFT.js) || (c.psi != null && c.psi > DRIFT.psi) || (c.ksP != null && c.ksP < DRIFT.ksP));
-    out.drift = { windowEnd: latest, checked: cols.length, drifted: drifted.slice(0, 15) };
+    // A column that drifted against both the previous window and the baseline is listed once.
+    const once = [...new Map(drifted.map((c) => [c.column, c])).values()];
+    out.drift = { windowEnd: latest, checked: new Set(cols.map((c) => c.column)).size, drifted: once.slice(0, 15) };
   } else if (driftQ) out.notes.push(`Drift metrics: ${dr.reason?.message || 'not readable'}`);
   if (profQ && pr.status === 'fulfilled') {
     const rows = pr.value;
-    const r = rows.find((x) => !x.slice_key || x.slice_key === 'null') || rows[0];
+    const r = rows.find((x) => (!x.slice_key || x.slice_key === 'null') && (x.model_id == null || x.model_id === '*')) || rows.find((x) => !x.slice_key || x.slice_key === 'null') || rows[0];
     if (r) {
       const perf = {};
       for (const k of ['accuracy_score', 'roc_auc', 'log_loss', 'mean_squared_error', 'root_mean_squared_error', 'mean_absolute_error', 'r2_score']) if (num(r[k]) != null) perf[k] = num(r[k]);
@@ -257,7 +311,7 @@ export async function readMonitoring({ base, token, table, warehouseId }, { fetc
 }
 
 // ---------- Unity Catalog tables: owner, description, columns, lineage, monitoring ----------
-export async function readTables({ base, token, tables, warehouseId }, { fetchImpl = fetch } = {}) {
+export async function readTables({ base, token, tables, warehouseId }, { fetchImpl = defaultFetch } = {}) {
   const names = [...new Set((tables || []).map((t) => String(t).trim()).filter(Boolean))].slice(0, 20);
   const bad = names.filter((t) => !validTable(t));
   if (bad.length) throw new Error(`Name tables as catalog.schema.table: ${bad.slice(0, 3).join(', ')}`);
@@ -280,7 +334,7 @@ export async function readTables({ base, token, tables, warehouseId }, { fetchIm
     const t = await tableInfo(fetchImpl, base, token, name);
     const r = {
       name, owner: String(t.owner || '').slice(0, 200), comment: String(t.comment || '').slice(0, 500), type: String(t.table_type || ''),
-      format: String(t.data_source_format || ''), columns: (t.columns || []).length, createdBy: String(t.created_by || '').slice(0, 200),
+      format: String(t.data_source_format || ''), columns: arr(t.columns).length, createdBy: String(t.created_by || '').slice(0, 200),
       updatedAt: iso(t.updated_at), upstream: [], downstream: [], lineageSource: null, monitor: null,
     };
     if (lineageRows) {
@@ -292,8 +346,8 @@ export async function readTables({ base, token, tables, warehouseId }, { fetchIm
         // Not in Databricks' public API reference: used only when no SQL warehouse is given.
         const j = await getJson(fetchImpl, `${base}/api/2.0/lineage-tracking/table-lineage?table_name=${encodeURIComponent(name)}&include_entity_lineage=false`, token);
         const full = (x) => { const i = x.tableInfo || {}; return [i.catalog_name, i.schema_name, i.name].every(Boolean) ? `${i.catalog_name}.${i.schema_name}.${i.name}` : null; };
-        r.upstream = [...new Set((j.upstreams || []).map(full).filter(Boolean))].slice(0, 30);
-        r.downstream = [...new Set((j.downstreams || []).map(full).filter(Boolean))].slice(0, 30);
+        r.upstream = [...new Set(arr(j.upstreams).map(full).filter(Boolean))].slice(0, 30);
+        r.downstream = [...new Set(arr(j.downstreams).map(full).filter(Boolean))].slice(0, 30);
         r.lineageSource = 'lineage API (unofficial)';
       } catch { /* no lineage available */ }
     }

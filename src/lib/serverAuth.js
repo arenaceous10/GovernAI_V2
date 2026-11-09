@@ -27,6 +27,7 @@ export function readBody(req, max) {
   if (+(req.headers?.['content-length'] || 0) > max) return { error: 'Request too large', status: 413 };
   let body;
   try { body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {}; } catch { return { error: 'Invalid JSON', status: 400 }; }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: 'Send a JSON object', status: 400 };
   if (JSON.stringify(body).length > max) return { error: 'Request too large', status: 413 };
   return { body };
 }

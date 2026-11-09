@@ -180,7 +180,7 @@ const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwA
     // 8. branding: the administrator sets a client's logo and colour; the client sees it
     await signIn(p, EMAIL.admin);
     await p.goto(URL + '#settings'); await W(p, 600);
-    await p.getByLabel('Review target in working days').fill('8'); await W(p, 600);
+    await p.getByLabel('Review target in working days').fill('8'); await p.getByLabel('Review target in working days').press('Enter'); await W(p, 600);
     await p.goto(URL + '#admin'); await W(p, 800);
     await p.getByRole('button', { name: 'Branding for Northwind Insurance' }).click(); await W(p);
     fs.writeFileSync('/tmp/logo.png', Buffer.from(PNG, 'base64'));

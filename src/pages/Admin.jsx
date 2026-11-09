@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Palette, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { FRAMEWORKS, SELECTABLE_FRAMEWORKS, PRINCIPLES, TIER_CUTOFFS } from '../data/frameworks.js';
 import { QUESTIONS, LEVEL_NAMES } from '../data/questionBank.js';
@@ -450,15 +450,13 @@ export function AdminSettings() {
           </Panel>
           <Panel title="Review target" sub="Working days from a submission to the governance team's decision. Reviews past it show as overdue in Operations and in reviewers' notifications.">
             <label className="row" style={{ gap: 8 }}>
-              <input className="input" type="number" min={1} max={30} style={{ width: 90 }} aria-label="Review target in working days" value={state.settings.reviewSlaDays || 5}
-                onChange={(e) => { const v = Math.max(1, Math.min(30, parseInt(e.target.value, 10) || 5)); setSetting('reviewSlaDays', v); }} />
+              <NumberSetting label="Review target in working days" min={1} max={30} fallback={5} width={90} value={state.settings.reviewSlaDays || 5} onSave={(v) => setSetting('reviewSlaDays', v)} />
               <span className="small">working days</span>
             </label>
           </Panel>
           <Panel title="Keeping deleted products" sub="Withdrawn and retired products stay archived, with their full record, for this many days before an administrator may delete them permanently. The tamper-evident record keeps the deletion either way.">
             <label className="row" style={{ gap: 8 }}>
-              <input className="input" type="number" min={0} max={3650} style={{ width: 100 }} aria-label="Days to keep before permanent deletion" value={state.settings.purgeAfterDays ?? 30}
-                onChange={(e) => setSetting('purgeAfterDays', Math.max(0, Math.min(3650, parseInt(e.target.value, 10) || 0)))} />
+              <NumberSetting label="Days to keep before permanent deletion" min={0} max={3650} fallback={30} width={100} value={state.settings.purgeAfterDays ?? 30} onSave={(v) => setSetting('purgeAfterDays', v)} />
               <span className="small">days</span>
             </label>
           </Panel>
@@ -514,6 +512,21 @@ function ChecklistRules() {
       </div>
     </Panel>
   );
+}
+
+// A number saved when the field is left (or Enter is pressed), not on every keystroke: typing "30" no longer saves
+// 3 first, and clearing the field never saves 0 by accident. Out-of-range values are brought back into range.
+function NumberSetting({ label, min, max, fallback, width, value, onSave }) {
+  const [v, setV] = useState(String(value));
+  useEffect(() => { setV(String(value)); }, [value]);
+  const commit = () => {
+    const n = parseInt(v, 10);
+    const next = Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+    setV(String(next));
+    if (next !== Number(value)) onSave(next);
+  };
+  return <input className="input" type="number" min={min} max={max} style={{ width }} aria-label={label} value={v}
+    onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} />;
 }
 
 function CutoffEditor() {

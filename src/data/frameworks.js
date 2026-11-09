@@ -304,8 +304,11 @@ export const TIER_CUTOFFS = {
   DPDP: { limited: 40, high: 65 },
   DEFAULT: { limited: 35, high: 60 },
 };
+// Saved cut-offs are checked again here: a malformed entry (outside 1-100, or Limited not below High) falls back to the default.
+const validCut = (c) => c && Number.isFinite(+c.limited) && Number.isFinite(+c.high) && +c.limited > 0 && +c.limited < +c.high && +c.high <= 100;
 export function cutoffsFor(fws = [], custom = {}) {
-  const table = { ...TIER_CUTOFFS, ...custom };
+  const ok = Object.fromEntries(Object.entries(custom || {}).filter(([, c]) => validCut(c)).map(([k, c]) => [k, { limited: +c.limited, high: +c.high }]));
+  const table = { ...TIER_CUTOFFS, ...ok };
   const list = fws.filter((f) => table[f]).map((f) => table[f]);
   if (!list.length) return { ...table.DEFAULT, from: [] };
   return { limited: Math.min(...list.map((c) => c.limited)), high: Math.min(...list.map((c) => c.high)), from: fws.filter((f) => table[f]) };

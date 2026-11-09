@@ -1,6 +1,7 @@
 import { Check, CornerDownLeft, Hourglass } from 'lucide-react';
 import { STAGES, PHASES, ON_DEMAND, STAGE_STATUS } from '../data/lifecycle.js';
 import { stagePct } from '../data/controls.js';
+import { useStore } from '../store/store.jsx';
 
 // State of stage n for a product: done, current (with its status), upcoming, on-demand or skipped.
 export function stageState(s, n) {
@@ -16,6 +17,7 @@ const SUB_ICON = { submitted: Hourglass, returned: CornerDownLeft };
 
 // Full lifecycle rail: ten stages grouped into four phases. Click a stage to view it.
 export function LifecycleRail({ s, viewing, onPick }) {
+  const rules = useStore()?.state?.settings?.checklistRules || {};
   const live = s.stage >= 7 || s.status === 'Retired';
   const pct = live ? 100 : Math.round(((s.stage - 1) / 6) * 100);
   const label = s.status === 'Retired' ? 'Retired' : live ? 'In production' : `${s.stage - 1} of 6 stages to production`;
@@ -38,7 +40,7 @@ export function LifecycleRail({ s, viewing, onPick }) {
                     <button type="button" onClick={() => onPick?.(n)} aria-current={st.kind === 'current' ? 'step' : undefined} aria-label={`Stage ${n}: ${meta.name}`} title={meta.name}>
                       <span className="rs-dot">{st.kind === 'done' ? <Check size={14} strokeWidth={2.5} /> : Icon ? <Icon size={13} /> : n}</span>
                       <span className="rs-name">{meta.short}</span>
-                      {st.kind === 'current' && <span className="rs-sub">{SUB[st.status]}{['open', 'returned'].includes(st.status) ? ` · ${stagePct(meta, s.stages?.[n])}%` : ''}</span>}
+                      {st.kind === 'current' && <span className="rs-sub">{SUB[st.status]}{['open', 'returned'].includes(st.status) ? ` · ${stagePct(meta, s.stages?.[n], s.assessment?.results?.tier, rules)}%` : ''}</span>}
                       {st.kind === 'ondemand' && <span className="rs-sub mute">If needed</span>}
                     </button>
                   </li>

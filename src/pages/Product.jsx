@@ -626,7 +626,15 @@ function DataTab({ s }) {
 function History({ s }) {
   const data = s.history.map((h, i) => ({ n: `${i + 1}. ${h.at.slice(0, 10)}`, Score: h.residual, 'Controls in place': h.readiness }));
   const approvals = STAGES.flatMap((st) => (s.stages?.[st.n]?.approvedAt ? [{ at: s.stages[st.n].approvedAt, text: `Stage ${st.n} approved: ${st.name}${s.stages[st.n].conditions ? ` (${s.stages[st.n].conditions})` : ''}` }] : []));
-  const events = [...approvals, ...(s.events || []).map((e) => ({ at: e.at, text: `${{ change: 'Change', incident: 'Incident', retire: 'Retirement' }[e.kind]}: ${e.text}` }))].sort((a, b) => b.at.localeCompare(a.at));
+  // Earlier rounds of stages 7 to 10 (each change, incident or monitoring period) are kept whole when a stage starts again.
+  const rounds = (s.rounds || []).map((rd) => {
+    const st = STAGES[rd.stage - 1]; const rec = rd.record || {};
+    const done = (st?.checklist || []).filter((i) => rec.checklist?.[i]).length;
+    const ev = Object.values(rec.evidence || {}).filter(Boolean).length;
+    const last = [...(rec.log || [])].reverse().find((e) => e.outcome && e.outcome !== 'Submitted');
+    return { at: rd.closedAt || '', text: `Earlier round of stage ${rd.stage}${st ? `, ${st.name}` : ''}, kept on record: ${last ? `${last.outcome.toLowerCase()}${last.comment ? ` (${last.comment})` : ''}` : STAGE_STATUS[rec.status] || 'in progress'}; ${done} of ${st?.checklist.length || 0} checks${ev ? `, ${ev} evidence item${ev === 1 ? '' : 's'}` : ''}` };
+  });
+  const events = [...approvals, ...rounds, ...(s.events || []).map((e) => ({ at: e.at, text: `${{ change: 'Change', incident: 'Incident', retire: 'Retirement' }[e.kind]}: ${e.text}` }))].sort((a, b) => String(b.at).localeCompare(String(a.at)));
   return (
     <div className="grid g2">
       <Panel title="Score over time">

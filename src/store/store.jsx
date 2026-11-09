@@ -6,7 +6,7 @@ import { cloud } from '../lib/cloud.js';
 import { applyOps, diffState, isEmptyOps, loadAll, resetDemo, T, profileFromRow } from './sync.js';
 import { AuthScreen, PendingScreen } from '../pages/Auth.jsx';
 import { removeEvidence } from '../lib/files.js';
-import { requiredApprovals, nextStage, stageOf } from '../data/lifecycle.js';
+import { requiredApprovals, nextStage, stageOf, ROLES } from '../data/lifecycle.js';
 import { TIERS, SELECTABLE_FRAMEWORKS } from '../data/frameworks.js';
 import { controlFor, controlById, isMandatory, itemState, validReason, SKIP_REASONS } from '../data/controls.js';
 
@@ -61,6 +61,7 @@ export function purgeEligible(x, days = 30) {
   return left > 0 ? { ok: false, why: `Kept for ${days} days after it was ${x.status.toLowerCase()}: ${left} day${left === 1 ? '' : 's'} left`, left } : { ok: true };
 }
 
+const ARCHIVED = ['Withdrawn', 'Retired'];
 const workable = (x, n) => n === x.stage && !['Retired', 'Withdrawn', 'Blocked', 'Draft'].includes(x.status) && ['open', 'returned'].includes(x.stages?.[n]?.status || 'open');
 
 export const newStage = () => ({ status: 'open', checklist: {}, evidence: {}, approvals: {}, note: '' });
@@ -98,17 +99,28 @@ export function visibleSystems(state) {
   return state.systems.filter((s) => (s.status === 'Draft' ? s.createdBy !== 'client' : !!s.assessment));
 }
 
+// A stage record that is about to be replaced by a fresh one (stage 7 after a change, a second change or incident)
+// is kept in x.rounds with its checks, evidence, approvals and log, so nothing recorded is lost.
+const hasContent = (rec) => !!rec && (Object.keys(rec.checklist || {}).length || Object.keys(rec.evidence || {}).length
+  || Object.keys(rec.approvals || {}).length || (rec.log || []).length || Object.keys(rec.skipped || {}).length);
+export function archiveRound(x, n) {
+  const rec = x.stages?.[n];
+  if (!hasContent(rec)) return x.rounds || [];
+  return [...(x.rounds || []), { stage: n, closedAt: nowIso(), record: rec }].slice(-60);
+}
+
 function advanceFrom(x, n, conditions = '') {
   const tier = x.assessment.results.tier;
   const stages = { ...x.stages, [n]: { ...x.stages[n], status: 'approved', approvedAt: nowIso(), conditions } };
   if (n === 10) return { ...x, stages, status: 'Retired' };
   const to = nextStage(n);
-  const out = { ...x, stages: { ...stages, [to]: to === n ? newStage() : (x.stages[to]?.status === 'approved' ? newStage() : x.stages[to] || newStage()) }, stage: to };
+  const reset = to === n || x.stages[to]?.status === 'approved' || (to === 7 && n !== 7);
+  const out = { ...x, rounds: reset ? archiveRound({ ...x, stages }, to) : x.rounds, stages: { ...stages, [to]: reset ? newStage() : x.stages[to] || newStage() }, stage: to };
+  if (!out.rounds) delete out.rounds;
   if (n === 6 || n === 7 || n === 8 || n === 9) {
     out.status = 'In production';
     out.nextReview = new Date(Date.now() + TIERS[tier].review * 30 * 86400000).toISOString().slice(0, 10);
   }
-  if (to === 7 && n !== 7) out.stages[7] = newStage();
   return out;
 }
 
@@ -241,12 +253,20 @@ export function StoreProvider({ children, standalone = null }) {
     ...s, audit: [{ at: nowIso(), actor: s.role, actorName: s.me?.name, org: s.role === 'client' ? s.clientOrg : null, action, target, detail }, ...s.audit].slice(0, 800),
   });
 
-  const updateSystem = useCallback((id, fn, action, detail) => {
+  // Every product write goes through here. A client only changes its own organisation's products, and withdrawn or
+  // retired products are read-only (opts.archived lets the administrator's restore through).
+  const updateSystem = useCallback((id, fn, action, detail, opts = {}) => {
     setState((s) => {
       let changed = false;
-      const systems = s.systems.map((x) => { if (x.id !== id) return x; const y = fn(x, s); if (y !== x) changed = true; return y; });
+      const systems = s.systems.map((x) => {
+        if (x.id !== id) return x;
+        if (s.role === 'client' && x.clientId !== s.clientOrg) return x;
+        if (ARCHIVED.includes(x.status) && !opts.archived) return x;
+        const y = fn(x, s); if (y !== x) changed = true; return y;
+      });
       if (!changed) return s;   // a guarded no-op (double click, stale screen) changes nothing and logs nothing
-      return action ? log({ ...s, systems }, action, id, typeof detail === 'function' ? detail(s) : detail) : { ...s, systems };
+      const name = typeof action === 'function' ? action({ ...s, systems }) : action;
+      return name ? log({ ...s, systems }, name, id, typeof detail === 'function' ? detail(s) : detail) : { ...s, systems };
     });
   }, []);
 
@@ -290,7 +310,10 @@ export function StoreProvider({ children, standalone = null }) {
         const { data } = await cloud.from(T.profiles).select('*').order('created_at', { ascending: true });
         const users = (data || []).map(profileFromRow);
         const who = users.find((u) => u.id === id);
-        setState((s) => log({ ...s, users }, 'Access changed', null, `${who?.name || id}: ${Object.entries(patch).map(([k, v]) => `${k} ${v}`).join(', ')}`));
+        // Plain words for the audit log: role names, organisation names, "no organisation" rather than ids or null.
+        const say = ([k, v]) => (k === 'clientId' ? (v ? `organisation ${state.clients.find((c) => c.id === v)?.name || v}` : 'no organisation')
+          : k === 'role' ? `role ${ROLES[v]?.name || v || 'none'}` : `${k} ${v ?? 'none'}`);
+        setState((s) => log({ ...s, users }, 'Access changed', null, `${who?.name || id}: ${Object.entries(patch).map(say).join(', ')}`));
         if (savedRef.current) savedRef.current = { ...savedRef.current, users };
         return '';
       },
@@ -317,13 +340,17 @@ export function StoreProvider({ children, standalone = null }) {
         setState((s) => {
           const exists = s.systems.some((x) => x.id === newId);
           const base = exists ? s.systems.find((x) => x.id === newId) : blank(s, newId);
+          if (exists && (base.clientId !== s.clientOrg || base.status !== 'Draft')) return s;
           const sys = { ...base, ...meta, draft, updatedAt: nowIso() };
           const list = exists ? s.systems.map((x) => (x.id === newId ? sys : x)) : [sys, ...s.systems];
           return log({ ...s, systems: list }, 'Draft saved', newId, meta.name || 'Untitled');
         });
         return newId;
       },
-      deleteDraft: (id) => setState((s) => log({ ...s, systems: s.systems.filter((x) => !(x.id === id && x.status === 'Draft')) }, 'Draft deleted', id, '')),
+      deleteDraft: (id) => CAN.work(state.role) && setState((s) => {
+        const x = s.systems.find((y) => y.id === id && y.status === 'Draft' && y.clientId === s.clientOrg);
+        return x ? log({ ...s, systems: s.systems.filter((y) => y !== x) }, 'Draft deleted', id, x.name || x.draft?.name || '') : s;
+      }),
 
       register: (id, meta, assessment, actions) => {
         if (!CAN.work(state.role)) return id;
@@ -331,13 +358,15 @@ export function StoreProvider({ children, standalone = null }) {
         setState((s) => {
           const exists = s.systems.some((x) => x.id === newId);
           const prev = exists ? s.systems.find((x) => x.id === newId) : blank(s, newId);
+          if (exists && (prev.clientId !== s.clientOrg || ARCHIVED.includes(prev.status))) return s;
           const r = assessment.results;
+          const live = prev.stage >= 7 && prev.stages?.[6]?.status === 'approved';
           const first = !prev.assessment;
           const keepDone = (prev.actions || []).filter((a) => a.status === 'Done');
           const stage1 = first ? { ...newStage(), checklist: { 'The use case is entered into the inventory.': true, 'Initial risk classification and review path are complete.': true } } : null;
           const sys = {
             ...prev, ...meta, draft: null, updatedAt: nowIso(), assessment,
-            status: r.tier === 'unacceptable' ? 'Blocked' : first ? 'Active' : prev.status === 'Blocked' ? 'Active' : prev.status,
+            status: r.tier === 'unacceptable' ? 'Blocked' : first ? 'Active' : prev.status === 'Blocked' ? (live ? 'In production' : 'Active') : prev.status,
             stages: first ? { 1: stage1 } : prev.stages,
             actions: [...actions.filter((a) => !keepDone.some((k) => k.qid === a.qid)), ...keepDone],
             history: [...(prev.history || []), { at: nowIso(), tier: r.tier, inherent: r.inherent, residual: r.residual, readiness: r.readiness }],
@@ -354,7 +383,7 @@ export function StoreProvider({ children, standalone = null }) {
         const rec = x.stages[n] || newStage();
         const skipped = { ...(rec.skipped || {}) }; delete skipped[item];
         return { ...x, actions: dropSkipAction(x.actions, n, item), stages: { ...x.stages, [n]: { ...rec, skipped, checklist: { ...rec.checklist, [item]: !rec.checklist[item] } } } };
-      }),
+      }, (s2) => (s2.systems.find((y) => y.id === id)?.stages?.[n]?.checklist?.[item] ? 'Check ticked' : 'Check cleared'), `Stage ${n}: ${item}`),
       // Skip an optional check with a reason. Reasons that need follow-up become actions linked to the control.
       skipCheck: (id, n, item, { category, reason, due }) => {
         if (!CAN.work(state.role)) return 'Only the client can skip checks';
@@ -375,11 +404,11 @@ export function StoreProvider({ children, standalone = null }) {
             id: uid('act'), qid: `check:${n}:${c.id}`, source: 'checklist', stage: n, item, control: c.id, topic: c.name,
             action: `${why.id === 'planned' ? 'Complete' : 'Review the accepted risk for'}: ${item.replace(/\.$/, '')}. Reason given: ${reason.trim()}`,
             principle: 'accountability', refs: `Control ${c.id}, stage ${n}`, priority: why.id === 'accepted' ? 'High' : 'Medium',
-            due: due || new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10), status: 'Open', owner: '',
+            due: (why.needsDate && due) || new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10), status: 'Open', owner: '',
           }] : [];
           return {
             ...y, actions: [...dropSkipAction(y.actions, n, item), ...act],
-            stages: { ...y.stages, [n]: { ...rec, checklist, skipped: { ...(rec.skipped || {}), [item]: { category, reason: reason.trim(), due: due || null, at: nowIso(), control: c.id } } } },
+            stages: { ...y.stages, [n]: { ...rec, checklist, skipped: { ...(rec.skipped || {}), [item]: { category, reason: reason.trim(), due: (why.needsDate && due) || null, at: nowIso(), control: c.id } } } },
           };
         }, 'Check skipped', `Stage ${n}: ${item} (${why.label}: ${reason.trim()})`);
         return '';
@@ -389,18 +418,18 @@ export function StoreProvider({ children, standalone = null }) {
         const rec = x.stages[n] || newStage();
         const skipped = { ...(rec.skipped || {}) }; delete skipped[item];
         return { ...x, actions: dropSkipAction(x.actions, n, item), stages: { ...x.stages, [n]: { ...rec, skipped } } };
-      }),
+      }, 'Skip withdrawn', `Stage ${n}: ${item}`),
       // Ticks every item that is not skipped; skipped items keep their reason.
       checkAll: (id, n, items) => CAN.work(state.role) && updateSystem(id, (x) => {
         if (!workable(x, n)) return x;
         const rec = x.stages[n] || newStage();
         return { ...x, stages: { ...x.stages, [n]: { ...rec, checklist: Object.fromEntries(items.filter((i) => !rec.skipped?.[i]).map((i) => [i, true])) } } };
-      }),
+      }, 'All checks ticked', `Stage ${n}`),
       setEvidence: (id, n, item, value) => CAN.work(state.role) && updateSystem(id, (x) => {
         if (!workable(x, n)) return x;
         const rec = x.stages[n] || newStage();
         return { ...x, stages: { ...x.stages, [n]: { ...rec, evidence: { ...rec.evidence, [item]: value } } } };
-      }),
+      }, value ? 'Evidence attached' : 'Evidence removed', `Stage ${n}: ${item}${value?.file ? ` (${value.file})` : ''}`),
       submitStage: (id, n, note) => CAN.work(state.role) && updateSystem(id, (x) => {
         if (!workable(x, n) || stageBlockers(x, state.settings.checklistRules).length) return x;
         return { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...x.stages[n], status: 'submitted', note, submittedAt: nowIso(), approvals: {}, returnNote: '', log: [...(x.stages[n]?.log || []), { at: nowIso(), who: 'client', outcome: 'Submitted', comment: note }] } } };
@@ -409,7 +438,8 @@ export function StoreProvider({ children, standalone = null }) {
       reviewStage: (id, n, who, outcome, comment, internal = '') => CAN.review(state.role) && setState((s) => {
         const x = s.systems.find((y) => y.id === id);
         const rec = x?.stages?.[n];
-        if (!x || x.stage !== n || rec?.status !== 'submitted') return s;
+        // A product blocked by a re-assessment (prohibited practice), withdrawn or retired cannot be approved onwards.
+        if (!x || x.stage !== n || rec?.status !== 'submitted' || ['Blocked', 'Withdrawn', 'Retired', 'Draft'].includes(x.status)) return s;
         const waiting = waitingOn(x);
         const need = requiredApprovals(n, x.assessment.results.tier);
         const role = who === 'lead' && !need.includes('lead') ? 'assessor' : who;   // the lead can sign in the reviewer's place
@@ -439,7 +469,7 @@ export function StoreProvider({ children, standalone = null }) {
       startEvent: (id, kind, text) => CAN.raiseEvent(state.role) && updateSystem(id, (x) => {
         const to = { change: 8, incident: 9, retire: 10 }[kind];
         if (!to || x.stage !== 7 || x.status !== 'In production') return x;
-        return { ...x, stage: to, stages: { ...x.stages, [to]: newStage() }, events: [...(x.events || []), { at: nowIso(), kind, text }] };
+        return { ...x, stage: to, rounds: archiveRound(x, to), stages: { ...x.stages, [to]: newStage() }, events: [...(x.events || []), { at: nowIso(), kind, text }] };
       }, { change: 'Change raised', incident: 'Incident reported', retire: 'Retirement started' }[kind], text),
 
       // ----- actions and data -----
@@ -504,7 +534,7 @@ export function StoreProvider({ children, standalone = null }) {
           const y = { ...x, updatedAt: nowIso(), connector: { ...c, seenVersion: String(result.latest), alerts: [...(c.alerts || []), alert].slice(-20) } };
           if (!canRaise) return y;
           const text = `New model version ${result.latest} registered in ${c.model} (was ${x.connector.seenVersion}). Review the change before it is used.`;
-          return { ...y, stage: 8, stages: { ...y.stages, 8: newStage() }, events: [...(y.events || []), { at: nowIso(), kind: 'change', text, auto: true }] };
+          return { ...y, stage: 8, rounds: archiveRound(y, 8), stages: { ...y.stages, 8: newStage() }, events: [...(y.events || []), { at: nowIso(), kind: 'change', text, auto: true }] };
         }, fresh ? (canRaise ? 'Change raised' : 'New model version found') : driftNew ? 'Drift detected' : null,
         fresh ? `Version ${result.latest} in ${x0.connector.model}` : driftNew ? `${dr.drifted.length} column${dr.drifted.length === 1 ? '' : 's'} drifted in ${result.monitoring.table}: ${dr.drifted.map((d) => d.column).slice(0, 5).join(', ')}` : undefined);
         return fresh ? (canRaise ? 'raised' : 'found') : driftNew ? 'drift' : 'same';
@@ -591,7 +621,7 @@ export function StoreProvider({ children, standalone = null }) {
             }
           } catch (e) { return e.message || 'Could not delete'; }
           // evidence files: best effort, a leftover file is harmless
-          for (const x of products) for (const rec of Object.values(x.stages || {})) for (const v of Object.values(rec.evidence || {})) if (v?.path) removeEvidence(v);
+          for (const x of products) for (const rec of [...Object.values(x.stages || {}), ...(x.rounds || []).map((rd) => rd.record)]) for (const v of Object.values(rec?.evidence || {})) if (v?.path) removeEvidence(v);
         }
         setState((s) => {
           const users = mode === 'cloud'
@@ -626,7 +656,7 @@ export function StoreProvider({ children, standalone = null }) {
           : { ...x, withdrawal: { ...x.withdrawal, ...d, status: 'rejected' } };
       }, approve ? 'Product withdrawn' : 'Withdrawal refused', comment || undefined),
       restoreProduct: (id) => state.role === 'admin' && updateSystem(id, (x) => (x.status === 'Withdrawn'
-        ? { ...x, status: x.withdrawal?.previousStatus || 'Active', withdrawal: { ...x.withdrawal, status: 'restored', restoredAt: nowIso() } } : x), 'Product restored'),
+        ? { ...x, status: x.withdrawal?.previousStatus || 'Active', withdrawal: { ...x.withdrawal, status: 'restored', restoredAt: nowIso() } } : x), 'Product restored', undefined, { archived: true }),
       purgeProduct: async (id) => {
         if (state.role !== 'admin') return 'Only an administrator can delete a product permanently';
         const x = state.systems.find((y) => y.id === id);
@@ -640,7 +670,7 @@ export function StoreProvider({ children, standalone = null }) {
             const { error } = await cloud.from(T.notes).delete().eq('product_id', id);
             if (error) return error.message;
           } catch (e) { return e.message || 'Could not delete'; }
-          for (const rec of Object.values(x.stages || {})) for (const v of Object.values(rec.evidence || {})) if (v?.path) removeEvidence(v);
+          for (const rec of [...Object.values(x.stages || {}), ...(x.rounds || []).map((rd) => rd.record)]) for (const v of Object.values(rec?.evidence || {})) if (v?.path) removeEvidence(v);
         }
         setState((s) => log({ ...s, systems: s.systems.filter((y) => y.id !== id), notes: (s.notes || []).filter((n) => n.productId !== id) },
           'Product deleted permanently', null, `${x.code} ${x.name} (${x.status})`));

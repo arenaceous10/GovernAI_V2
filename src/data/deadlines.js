@@ -18,8 +18,8 @@ export const DEADLINES = [
     applies: (s) => sel(s).includes('EU_AI_ACT') && (prof(s).transparency || []).some((t) => t === 'synthetic' || t === 'deepfake'),
   },
   {
-    id: 'dpdp-consent', fw: 'DPDP', date: '2026-11-13', title: 'DPDP consent manager registration (Rule 4)',
-    what: 'Consent managers must be registered with the Data Protection Board.',
+    id: 'dpdp-consent', fw: 'DPDP', date: '2026-11-13', title: 'DPDP consent manager framework starts (Rule 4)',
+    what: 'Consent managers can register with the Data Protection Board. This matters only if you will take consent through one; your own DPDP duties start on 13 May 2027.',
     applies: (s) => sel(s).includes('DPDP'),
   },
   {
@@ -39,7 +39,7 @@ export const daysUntil = (iso, now = Date.now()) => Math.ceil((new Date(`${iso}T
 
 // Deadlines for one product, soonest first. Past ones are dropped after 30 days.
 export function deadlinesFor(s, now = Date.now()) {
-  if (!s?.assessment || ['Retired', 'Draft'].includes(s.status)) return [];
+  if (!s?.assessment || ['Retired', 'Draft', 'Withdrawn'].includes(s.status)) return [];
   return DEADLINES.filter((d) => d.applies(s)).map((d) => ({ ...d, days: daysUntil(d.date, now) }))
     .filter((d) => d.days > -30).sort((a, b) => a.days - b.days);
 }

@@ -179,7 +179,9 @@ export function freeze(q, profile, source, why = '', overrides = {}) {
 // tailored-pool ones are eligible for every use case and ranked by weight and description keywords.
 export const CUSTOM_PREFIX = 'CQ-';
 export function customBank(custom = []) {
+  const seen = new Set(QUESTIONS.map((q) => q.id));
   return (Array.isArray(custom) ? custom : []).filter((c) => c && c.active !== false && c.q && Array.isArray(c.options) && c.options.length === 4 && c.section)
+    .filter((c) => !seen.has(c.id) && seen.add(c.id))
     .map((c) => ({
       id: c.id, kind: c.kind === 'adaptive' ? 'adaptive' : 'core', weight: [1, 2, 3].includes(+c.weight) ? +c.weight : 2,
       topic: c.topic || 'Custom question', maps: { [c.section]: c.ref || 'Custom' }, principle: c.principle || 'accountability',
@@ -362,7 +364,7 @@ export function readinessStatus(s) {
 export function maturityLevel(s) {
   if (s == null) return { level: 0, label: 'Not assessed' };
   const levels = ['Initial', 'Developing', 'Defined', 'Managed', 'Optimised'];
-  const i = Math.min(4, Math.floor(s / 20));
+  const i = Math.max(0, Math.min(4, Math.floor(s / 20)));
   return { level: i + 1, label: levels[i] };
 }
 

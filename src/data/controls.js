@@ -184,9 +184,5 @@ export function stageCompletion(st, rec, tier, rules) {
   const done = out.mandatory.done + out.optional.done + out.optional.skipped + out.evidence.done;
   return { ...out, done, total, pct: total ? Math.round((done / total) * 100) : 100 };
 }
-// Same percentage without the mandatory split, for places that have no tier or rules at hand.
-export const stagePct = (st, rec) => {
-  const total = (st?.checklist?.length || 0) + (st?.evidence?.length || 0);
-  const done = (st?.checklist || []).filter((i) => itemState(rec, i) !== 'open').length + (st?.evidence || []).filter((i) => rec?.evidence?.[i]).length;
-  return total ? Math.round((done / total) * 100) : 100;
-};
+// The same percentage as the completion scale, so the rail and the scale always agree.
+export const stagePct = (st, rec, tier, rules) => stageCompletion(st, rec, tier, rules).pct;

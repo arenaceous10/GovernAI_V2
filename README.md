@@ -26,6 +26,7 @@ npm install          # once, needs internet
 npm run dev          # http://localhost:5173
 npm test             # unit tests (engine, store sync, features, AI guard, record and packs, operations, documents)
 npm run test:db      # database rules and triggers, on an in-process Postgres (PGlite)
+npm run test:fuzz    # about 200,000 generated cases across the engine, store, server code and database (SCALE=0.2 for a quick pass)
 npm run build        # production build in dist/
 npm run build:single # one self-contained dist-single/index.html (double-click to open)
 ```
@@ -74,6 +75,7 @@ beside any other tables in the project; the older tables (`use_cases`, `checklis
 | `006_function_privileges.sql` | Tighter execute rights and search paths on the database functions. |
 | `007_ledger_and_ops.sql` | Tamper-evident record (`v2_ledger`) written by triggers, and client branding. Existing products get a starting entry. |
 | `008_withdrawal_guard.sql` | Clients may request or cancel a withdrawal; only the governance team decides, and withdrawn products are frozen for clients. |
+| `009_test_sweep_fixes.sql` | A live product unblocked by a re-assessment returns to production; retired products are frozen for clients; closed stage rounds are not recorded as removals; repeated identical log entries are each recorded. |
 
 Saving: every change is saved as it happens. A failure shows "Not saved" with Retry in the sidebar. Other people's changes
 appear when the tab regains focus. In Supabase Auth settings, keep email confirmation on and turn on leaked-password protection.
@@ -212,8 +214,14 @@ identifiers, never pasted into SQL text.
 
 ## Tests
 
+The fuzz suites (`tests/fuzz`) generate random products, answers, people and requests and check rules that must
+always hold: scores stay in range and never improve when controls get worse; a client never changes another
+organisation's product, an archived product or a decision; nothing recorded is lost when a stage starts again; the
+record always verifies; private network addresses are refused in every spelling; registry answers of any shape give
+a plain error, never a crash.
+
 ```bash
-npm test && npm run test:db
+npm test && npm run test:db && npm run test:fuzz
 
 npx playwright install chromium            # once
 # Browser-only demo build:
@@ -222,7 +230,7 @@ node tests/e2e/lifecycle.cjs               # landing, registration, all 10 stage
 node tests/e2e/drafts-reassess-mobile.cjs  # drafts, re-assessment, mobile layout
 node tests/e2e/features.cjs                # Not known, skips with reasons, controls, actions, AI cards, deck
 node tests/e2e/contrast.cjs                # text contrast on every page
-node tests/e2e/random-clicks.cjs 7 3       # random clicks on every page for every role
+node tests/e2e/random-clicks.cjs 7 3       # random clicks and typing (hostile text too) on every page for every role
 
 # Cloud build against the in-memory Supabase stand-in (tests/e2e/fake-supabase.cjs), signed with a test key:
 VITE_SUPABASE_URL=https://fake.supabase.co VITE_SUPABASE_ANON_KEY=test \

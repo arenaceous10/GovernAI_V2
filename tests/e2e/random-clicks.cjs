@@ -32,20 +32,28 @@ const CLOUD = process.env.CLOUD === '1';
       for (let n = 0; n < navs.length; n++) {
         await p.locator('nav.nav button').nth(n).click().catch(() => {}); await p.waitForTimeout(60);
         for (let k = 0; k < 14; k++) {
-          const els = await p.locator('main button:visible:not([disabled]), main [role=radio]:visible, main [role=checkbox]:visible, main input[type=checkbox]:visible:not([disabled]), main select:visible:not([disabled]), main tr.click:visible').all();
+          const els = await p.locator('main button:visible:not([disabled]), main [role=radio]:visible, main [role=checkbox]:visible, main input[type=checkbox]:visible:not([disabled]), main select:visible:not([disabled]), main tr.click:visible, main input:not([type]):visible:not([disabled]), main input[type=text]:visible:not([disabled]), main input[type=number]:visible:not([disabled]), main input[type=date]:visible:not([disabled]), main textarea:visible:not([disabled])').all();
           if (!els.length) break;
           const el = els[Math.floor(rnd() * els.length)];
           const tag = await el.evaluate(e => e.tagName).catch(() => '');
           const txt = (await el.innerText().catch(() => '')) || '';
           if (/Sign out/.test(txt)) continue;
           try {
-            if (tag === 'SELECT') { const opts = await el.locator('option').all(); if (opts.length) { const v = await opts[Math.floor(rnd() * opts.length)].getAttribute('value'); await el.selectOption(v ?? undefined, { timeout: 1500 }); } }
+            const type = await el.getAttribute('type').catch(() => '');
+            if (tag === 'TEXTAREA' || (tag === 'INPUT' && type !== 'checkbox')) {
+              const pick = (xs) => xs[Math.floor(rnd() * xs.length)];
+              const v = type === 'number' ? pick(['0', '-5', '99999', '3.5', '']) : type === 'date' ? pick(['2026-12-01', '2020-01-01', '']) : pick(['<img src=x onerror=alert(1)>', 'x'.repeat(5000), 'Ünïcødé 名前 🚀', '   ', 'The vendor contract covers this control fully.', "'; drop table x; --", '{{7*7}}', '']);
+              await el.fill(v, { timeout: 1500 });
+            } else if (tag === 'SELECT') { const opts = await el.locator('option').all(); if (opts.length) { const v = await opts[Math.floor(rnd() * opts.length)].getAttribute('value'); await el.selectOption(v ?? undefined, { timeout: 1500 }); } }
             else await el.click({ timeout: 1500 });
             clicks++;
           } catch { /* element went away: fine */ }
           await p.waitForTimeout(25);
           const filled = await p.locator('#root').innerText().catch(() => '');
           if (!filled.trim()) { errs.push(`run${run} BLANK SCREEN after "${txt.slice(0, 40)}" as ${r}`); break; }
+          const odd = filled.replaceAll('Kept, period undefined', '').match(/.{0,50}(\bNaN\b|\bundefined\b|\[object Object\]|Invalid Date|\bnull\b(?! hypothesis)).{0,30}/);
+          if (odd) errs.push(`run${run} odd text as ${r} on ${await p.evaluate(() => location.hash)}: ${odd[0].replace(/\s+/g, ' ')}`);
+          if (await p.locator('img[src="x"]').count()) errs.push(`run${run} injected HTML rendered as ${r}`);
         }
       }
     }
