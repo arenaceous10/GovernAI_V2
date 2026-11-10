@@ -3,7 +3,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { buildSeed } from './seed.js';
 import { cloud } from '../lib/cloud.js';
-import { applyOps, diffState, isEmptyOps, loadAll, resetDemo, T, profileFromRow } from './sync.js';
+import { reportError } from '../lib/errors.js';
+import { applyOps, diffState, isEmptyOps, loadAll, loadAuditBefore, resetDemo, T, profileFromRow } from './sync.js';
 import { AuthScreen, PendingScreen } from '../pages/Auth.jsx';
 import { removeEvidence } from '../lib/files.js';
 import { requiredApprovals, nextStage, stageOf, ROLES } from '../data/lifecycle.js';
@@ -129,6 +130,7 @@ export function StoreProvider({ children, standalone = null }) {
   const [boot, setBoot] = useState(cloud ? 'loading' : 'ready');
   const [bootError, setBootError] = useState('');
   const [syncError, setSyncError] = useState('');
+  const [syncNotice, setSyncNotice] = useState('');   // why the screen was reloaded (refused or overtaken save)
   const [state, setState] = useState(() => (cloud ? shell() : load()));
   // cloud only: 'checking' | 'signedout' | 'pending' | 'in'
   const [auth, setAuth] = useState({ phase: cloud ? 'checking' : 'none', profile: null, recovery: false });
@@ -139,17 +141,20 @@ export function StoreProvider({ children, standalone = null }) {
   const lastFetch = useRef(0);
   const userRef = useRef(null);           // signed-in user id, so repeated auth events do not reload
   const recheck = useRef(null);           // re-reads the signed-in user's access
+  const revsRef = useRef(new Map());      // product id -> version last read or saved (refuses saves over newer work)
 
   // ----- cloud: load what this signed-in user may see (row-level security filters it) -----
   const start = useCallback(async (profile) => {
     setBoot('loading'); setBootError(''); setSyncError('');
     try {
       const remote = await withTimeout(loadAll(cloud), 15000);
+      revsRef.current = remote.revs || new Map();
       let next = fromRemote(shell(), remote);
       if (remote.empty && profile.role === 'admin') {
         const seed = { ...shell(), ...buildSeed() };
         await resetDemo(cloud, seed);
-        next = fromRemote(shell(), await loadAll(cloud));
+        const fresh = await loadAll(cloud); revsRef.current = fresh.revs || new Map();
+        next = fromRemote(shell(), fresh);
       }
       next = { ...next, role: profile.role, clientOrg: profile.role === 'client' ? profile.clientId || null : null, me: { id: profile.id, name: profile.name, email: profile.email } };
       savedRef.current = next; lastFetch.current = Date.now();
@@ -187,7 +192,7 @@ export function StoreProvider({ children, standalone = null }) {
     const ok = profile && profile.status === 'active' && profile.role && (profile.role !== 'client' || profile.clientId);
     const same = ok && auth.profile && profile.role === auth.profile.role && profile.clientId === auth.profile.clientId && auth.phase === 'in';
     if (same && !reloadNote) return;
-    if (same) { await start(profile); setSyncError(reloadNote); return; }
+    if (same) { await start(profile); setSyncError(''); setSyncNotice(reloadNote); return; }
     userRef.current = null; savedRef.current = null;
     onSession(sess.session);
   };
@@ -212,15 +217,21 @@ export function StoreProvider({ children, standalone = null }) {
       if (!savedRef.current) return;
       const ops = diffState(savedRef.current, target, { users: false });
       if (isEmptyOps(ops)) { savedRef.current = target; return; }
-      try { await applyOps(cloud, ops); savedRef.current = target; setSyncError(''); }
+      try { await applyOps(cloud, ops, revsRef.current); savedRef.current = target; setSyncError(''); }
       catch (e) {
+        // Someone else saved this product after this screen loaded it: load theirs rather than overwrite it.
+        if (e.code === '40001') {
+          recheck.current?.(`${e.productName ? `Someone else changed ${e.productName}` : 'Someone else changed a product'} while you were working on it, so your last change to it was not saved. The latest version is now on screen: please make the change again`);
+          return;
+        }
         // Refused by a lifecycle rule in the database (only the governance team may approve, move stages or go live,
         // or this copy was older than the server's): load the current version so the screen shows what is true.
         if (e.code === '42501' && !/row-level security|permission denied/i.test(e.message || '')) {
-          recheck.current?.(`${e.message}. The latest version has been loaded.`);
+          recheck.current?.(`${e.message}. The latest version has been loaded`);
           return;
         }
         setSyncError(e.message || 'Could not save');
+        if (!/row-level security|permission denied|42501|JWT|Failed to fetch|NetworkError/i.test(e.message || '')) reportError(e, 'save');
         // Refused by the database: access may have been changed or turned off since sign-in.
         if (/row-level security|permission denied|42501|JWT/i.test(e.message || '')) recheck.current?.();
       }
@@ -241,16 +252,20 @@ export function StoreProvider({ children, standalone = null }) {
         if (remote.empty || !savedRef.current) return;
         const cur = stateRef.current;
         if (!isEmptyOps(diffState(savedRef.current, cur, { users: false }))) return;
+        revsRef.current = remote.revs || new Map();
         const next = fromRemote(cur, remote);
         savedRef.current = next; setState(next);
       } catch { /* keep what is on screen */ }
     };
+    // Also every minute while the tab is open and nothing is waiting to be saved, so two people working at the same
+    // time see each other's changes and rarely collide.
+    const timer = setInterval(refresh, 60000);
     document.addEventListener('visibilitychange', refresh); window.addEventListener('focus', refresh);
-    return () => { document.removeEventListener('visibilitychange', refresh); window.removeEventListener('focus', refresh); };
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', refresh); window.removeEventListener('focus', refresh); };
   }, [mode, boot]);
 
   const log = (s, action, target, detail) => ({
-    ...s, audit: [{ at: nowIso(), actor: s.role, actorName: s.me?.name, org: s.role === 'client' ? s.clientOrg : null, action, target, detail }, ...s.audit].slice(0, 800),
+    ...s, audit: [{ at: nowIso(), actor: s.role, actorName: s.me?.name, org: s.role === 'client' ? s.clientOrg : null, action, target, detail }, ...s.audit].slice(0, Math.max(800, s.audit.length)),
   });
 
   // Every product write goes through here. A client only changes its own organisation's products, and withdrawn or
@@ -324,14 +339,27 @@ export function StoreProvider({ children, standalone = null }) {
           try {
             await queue.current;
             await resetDemo(cloud, { ...shell(), ...buildSeed(), settings: state.settings, bankOverrides: state.bankOverrides });
-            const next = { ...fromRemote(stateRef.current, await loadAll(cloud)) };
+            const fresh = await loadAll(cloud); revsRef.current = fresh.revs || new Map();
+            const next = { ...fromRemote(stateRef.current, fresh) };
             savedRef.current = next; setState(next); setSyncError('');
           } catch (e) { setSyncError(e.message || 'Could not reset'); }
           return;
         }
         setState(freshState({ role: state.role, clientOrg: state.role === 'client' ? state.clients[0]?.id || null : null }));
       },
-      sync: { mode, error: syncError, retry: flush },
+      // Older audit entries from the database. Added to both the saved and current state, so they are never re-saved.
+      loadOlderAudit: async () => {
+        if (mode !== 'cloud') return 0;
+        const cur = stateRef.current.audit;
+        const oldest = cur[cur.length - 1]?.at;
+        if (!oldest) return 0;
+        const older = await loadAuditBefore(cloud, oldest);
+        if (!older.length) return 0;
+        if (savedRef.current) savedRef.current = { ...savedRef.current, audit: [...savedRef.current.audit, ...older] };
+        setState((s) => ({ ...s, audit: [...s.audit, ...older] }));
+        return older.length;
+      },
+      sync: { mode, error: syncError, retry: flush, notice: syncNotice, dismiss: () => setSyncNotice('') },
 
       // ----- registration -----
       saveDraft: (id, draft, meta) => {
@@ -585,6 +613,16 @@ export function StoreProvider({ children, standalone = null }) {
         return '';
       },
       // Administrator: rename or update an organisation. Its products keep their link, so names follow everywhere.
+      // Per organisation: false keeps its descriptions away from the AI service even when AI questions are on.
+      setClientAi: (id, on) => {
+        if (state.role !== 'admin') return;
+        setState((s) => {
+          const c = s.clients.find((x) => x.id === id);
+          if (!c) return s;
+          const next = { ...c }; if (on) delete next.aiQuestions; else next.aiQuestions = false;
+          return log({ ...s, clients: s.clients.map((x) => (x.id === id ? next : x)) }, on ? 'AI questions allowed' : 'AI questions turned off', null, c.name);
+        });
+      },
       updateClient: (id, patch) => {
         if (state.role !== 'admin') return 'Not allowed';
         const name = (patch.name ?? '').trim();
@@ -695,7 +733,7 @@ export function StoreProvider({ children, standalone = null }) {
         return log({ ...s, bankOverrides: b }, 'Question wording reset', null, qid);
       }),
     };
-  }, [state, updateSystem, mode, syncError, flush]);
+  }, [state, updateSystem, mode, syncError, syncNotice, flush]);
 
   // Public pages (e.g. checking an evidence pack) need no sign-in; signed-in people get them inside the app.
   if (standalone && (mode === 'cloud' ? auth.phase !== 'in' && !auth.recovery : !state.role)) return <Ctx.Provider value={null}>{standalone}</Ctx.Provider>;

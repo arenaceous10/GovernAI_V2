@@ -24,7 +24,7 @@ const U = { a: '00000000-0000-0000-0000-00000000000a', b: '00000000-0000-0000-00
 async function setup() {
   const db = new PGlite();
   await db.exec(PRELUDE);
-  for (const f of ['001_governai_v2.sql', '002_evidence_files.sql', '003_auth_rbac.sql', '004_ai_usage.sql', '005_security_fixes.sql', '006_function_privileges.sql', '007_ledger_and_ops.sql', '008_withdrawal_guard.sql', '009_test_sweep_fixes.sql']) await db.exec(MIG(f));
+  for (const f of ['001_governai_v2.sql', '002_evidence_files.sql', '003_auth_rbac.sql', '004_ai_usage.sql', '005_security_fixes.sql', '006_function_privileges.sql', '007_ledger_and_ops.sql', '008_withdrawal_guard.sql', '009_test_sweep_fixes.sql', '010_product_versions.sql', '011_operations.sql']) await db.exec(MIG(f));
   await db.exec(`grant select, insert, update, delete on all tables in schema public to anon, authenticated;
     revoke insert, update, delete on public.v2_ai_usage from anon, authenticated;
     revoke insert, update, delete on public.v2_ledger from anon, authenticated;`);
@@ -319,4 +319,73 @@ test('test sweep fixes: unblocking a live product, retired products, closed roun
   await upsert(db, U.admin, dup);
   const d = (await db.query(`select count(*)::int as n from public.v2_ledger where chain = 'dp' and kind = 'decision'`)).rows[0].n;
   assert.equal(d, 2);
+});
+
+test('product versions: a save over a newer version is refused, and each save counts up', async () => {
+  const { db, orgA } = await setup();
+  const p = product('vv', orgA, { status: 'Active' });
+  await upsert(db, U.admin, p);
+  const rev = async () => Number((await db.query(`select rev from public.v2_products where id = 'vv'`)).rows[0].rev);
+  assert.equal(await rev(), 0);
+  const save = (uid, data, r) => as(db, uid, `insert into public.v2_products (id, client_id, code, name, status, stage, data, rev) values ($1, $2, $3, $4, $5, $6, $7, $8)
+    on conflict (id) do update set name = excluded.name, data = excluded.data, rev = excluded.rev`, [data.id, data.clientId, data.code, data.name, data.status, data.stage, data, r]);
+  await save(U.a, { ...p, card: { summary: 'first' } }, 0);
+  assert.equal(await rev(), 1);
+  await fails(save(U.a, { ...p, card: { summary: 'stale' } }, 0), /Someone else changed/);
+  await save(U.a, { ...p, card: { summary: 'second' } }, 1);
+  assert.equal(await rev(), 2);
+  await upsert(db, U.admin, { ...p, card: { summary: 'operator fix' } });   // a write without rev keeps counting
+  assert.equal(await rev(), 3);
+});
+
+test('backup and restore: deleted products come back with their record, which still verifies', async () => {
+  const { db, orgA } = await setup();
+  const { verifyChain } = await import('../../src/lib/ledger.js');
+  const { execFileSync } = await import('node:child_process');
+  const { writeFileSync } = await import('node:fs');
+  const p = product('bk', orgA, { status: 'Active', stages: { 1: stage({ log: [{ who: 'client', outcome: 'Submitted', at: 'x' }] }) } });
+  await upsert(db, U.admin, p);
+  await upsert(db, U.admin, { ...p, name: 'Renamed' });
+  const all = async (t, o) => (await db.query(`select * from public.${t} order by ${o}`)).rows;
+  const backup = { format: 'governai-backup', version: 1, exportedAt: new Date().toISOString(), tables: {
+    v2_clients: await all('v2_clients', 'id'), v2_profiles: await all('v2_profiles', 'id'), v2_products: await all('v2_products', 'id'),
+    v2_notes: [], v2_settings: await all('v2_settings', 'key'), v2_audit: await all('v2_audit', 'id'), v2_ledger: await all('v2_ledger', 'chain, seq') } };
+  const ledgerBefore = backup.tables.v2_ledger.filter((r) => r.chain === 'bk');
+  await as(db, U.admin, `delete from public.v2_products where id = 'bk'`);
+  writeFileSync('/tmp/gov-backup.json', JSON.stringify(backup));
+  const sql = execFileSync(process.execPath, [new URL('../../scripts/backup-to-sql.mjs', import.meta.url).pathname, '/tmp/gov-backup.json']).toString();
+  await db.exec(sql);
+  await db.exec(sql);   // running it twice changes nothing
+  const back = (await db.query(`select data, rev from public.v2_products where id = 'bk'`)).rows[0];
+  assert.equal(back.data.name, 'Renamed');
+  const chain = (await db.query(`select * from public.v2_ledger where chain = 'bk' order by seq`)).rows;
+  assert.ok(chain.length >= ledgerBefore.length + 1, 'the deletion stays on record too');
+  assert.ok((await verifyChain(chain)).ok, 'record still verifies');
+  const auditCount = (await db.query('select count(*)::int n from public.v2_audit')).rows[0].n;
+  await db.exec(sql);
+  assert.equal((await db.query('select count(*)::int n from public.v2_audit')).rows[0].n, auditCount, 'audit rows not duplicated');
+});
+
+test('error reports: people add their own, at most 30 an hour; only administrators read them', async () => {
+  const { db } = await setup();
+  for (let i = 0; i < 35; i++) await as(db, U.a, `insert into public.v2_client_errors (message, page) values ($1, '#x')`, [`boom ${i}`]);
+  const n = (await db.query('select count(*)::int n from public.v2_client_errors')).rows[0].n;
+  assert.equal(n, 30);
+  await fails(as(db, U.a, `insert into public.v2_client_errors (message, user_id) values ('x', '${U.b}')`), /row-level security|violates/);
+  assert.equal((await as(db, U.a, 'select * from public.v2_client_errors')).rows.length, 0, 'clients cannot read reports');
+  assert.equal((await as(db, U.admin, 'select * from public.v2_client_errors')).rows.length, 30, 'administrators can');
+  const h = (await as(db, U.a, 'select public.gov_health() h')).rows[0].h;
+  assert.equal(h.db, true);
+});
+
+test('twenty people saving the same version at once: exactly one save wins', async () => {
+  const { db, orgA } = await setup();
+  const p = product('race', orgA, { status: 'Active' });
+  await upsert(db, U.admin, p);
+  const save = (i) => as(db, i % 2 ? U.a : U.admin, `insert into public.v2_products (id, client_id, code, name, status, stage, data, rev) values ($1, $2, $3, $4, $5, $6, $7, 0)
+    on conflict (id) do update set data = excluded.data, rev = excluded.rev`, [p.id, p.clientId, p.code, p.name, p.status, p.stage, { ...p, card: { summary: `writer ${i}` } }]);
+  const results = await Promise.allSettled(Array.from({ length: 20 }, (_, i) => save(i)));
+  assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+  assert.ok(results.filter((r) => r.status === 'rejected').every((r) => /Someone else changed/.test(r.reason.message)));
+  assert.equal(Number((await db.query(`select rev from public.v2_products where id = 'race'`)).rows[0].rev), 1);
 });

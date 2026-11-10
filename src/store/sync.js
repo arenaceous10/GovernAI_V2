@@ -4,11 +4,14 @@
 export const T = { products: 'v2_products', audit: 'v2_audit', clients: 'v2_clients', users: 'v2_users', settings: 'v2_settings', profiles: 'v2_profiles', notes: 'v2_notes' };
 export const AUDIT_LIMIT = 800;
 
-export const productRow = (s) => ({
+// revs: id -> the version this browser last read or saved (see 010_product_versions.sql). A save carries it, so the
+// database can refuse a save made over someone else's newer one.
+export const productRow = (s, revs) => ({
   id: s.id, client_id: s.clientId || null, code: s.code || null, name: s.name || null, status: s.status || null,
   stage: s.stage || 1, data: s, updated_at: s.updatedAt || s.createdAt || new Date().toISOString(),
+  ...(revs instanceof Map ? { rev: revs.get(s.id) ?? 0 } : {}),
 });
-export const clientRow = (c) => ({ id: c.id, name: c.name, sector: c.sector || null, contact: c.contact || null, brand: c.brand || null });
+export const clientRow = (c) => ({ id: c.id, name: c.name, sector: c.sector || null, contact: c.contact || null, brand: c.brand || null, ai_questions: c.aiQuestions === false ? false : null });
 export const userRow = (u) => ({ id: u.id, name: u.name, email: u.email, role: u.role, client_id: u.clientId || null });
 export const auditRow = (e) => ({ at: e.at, actor: e.actor || null, actor_name: e.actorName || null, org: e.org || null, action: e.action, target: e.target || null, detail: e.detail || null });
 export const auditFromRow = (r) => ({ at: r.at, actor: r.actor, actorName: r.actor_name || undefined, org: r.org || undefined, action: r.action, target: r.target, detail: r.detail || '' });
@@ -18,7 +21,7 @@ export const profileFromRow = (r) => ({
   id: r.id, name: r.name, email: r.email, role: r.role, side: r.side, status: r.status, requestedRole: r.requested_role || null,
   company: r.company || '', createdAt: r.created_at, ...(r.client_id ? { clientId: r.client_id } : {}),
 });
-export const clientFromRow = (r) => ({ id: r.id, name: r.name, sector: r.sector || '', contact: r.contact || '', ...(r.brand ? { brand: r.brand } : {}), ...(r.created_at ? { createdAt: r.created_at } : {}) });
+export const clientFromRow = (r) => ({ id: r.id, name: r.name, sector: r.sector || '', contact: r.contact || '', ...(r.brand ? { brand: r.brand } : {}), ...(r.ai_questions === false ? { aiQuestions: false } : {}), ...(r.created_at ? { createdAt: r.created_at } : {}) });
 export const userFromRow = (r) => ({ id: r.id, name: r.name, email: r.email, role: r.role, ...(r.client_id ? { clientId: r.client_id } : {}) });
 
 // What changed between the last saved state and the current one. Identity comparison: updates replace only the objects they change.
@@ -47,10 +50,18 @@ export const isEmptyOps = (o) => Object.values(o).every((v) => v.length === 0);
 const ok = async (q) => { const { error } = await q; if (error) throw Object.assign(new Error(error.message || 'Database error'), { code: error.code }); };
 
 // Order matters: audit goes last, so a retry after a partial failure never duplicates audit rows.
-export async function applyOps(db, ops) {
+export async function applyOps(db, ops, revs) {
   if (ops.clients.length) await ok(db.from(T.clients).upsert(ops.clients.map(clientRow)));
   if (ops.users.length) await ok(db.from(T.users).upsert(ops.users.map(userRow)));
-  if (ops.products.length) await ok(db.from(T.products).upsert(ops.products.map(productRow)));
+  if (ops.products.length) {
+    // One product per request, so a conflict on one product does not hold back the others.
+    for (const p of ops.products) {
+      const { data, error } = await db.from(T.products).upsert(productRow(p, revs)).select('id,rev');
+      if (error) throw Object.assign(new Error(error.message || 'Database error'), { code: error.code, productId: p.id, productName: p.name });
+      if (revs && data?.[0]) revs.set(data[0].id, Number(data[0].rev) || 0);
+    }
+  }
+  if (ops.productsDel.length && revs) for (const id of ops.productsDel) revs.delete(id);
   if (ops.productsDel.length) await ok(db.from(T.products).delete().in('id', ops.productsDel));
   if (ops.usersDel.length) await ok(db.from(T.users).delete().in('id', ops.usersDel));
   if (ops.clientsDel.length) await ok(db.from(T.clients).delete().in('id', ops.clientsDel));
@@ -76,23 +87,54 @@ export function productFromRow(r) {
   return { ...d, id: r.id ?? d.id, clientId: r.client_id ?? undefined, actions: d.actions || [], datasets: d.datasets || [], outputs: d.outputs || [] };
 }
 
+// The database answers at most 1,000 rows per request, so whole tables are read in pages.
+const PAGE = 1000;
+export async function getAllRows(make) {
+  const out = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await make().range(from, from + PAGE - 1);
+    if (error) throw new Error(error.message || 'Database error');
+    out.push(...(data || []));
+    if (!data || data.length < PAGE) return out;
+  }
+}
+
 export async function loadAll(db) {
   const get = async (q) => { const { data, error } = await q; if (error) throw new Error(error.message || 'Database error'); return data || []; };
   const [products, clients, users, audit, settings, notes] = await Promise.all([
-    get(db.from(T.products).select('id,client_id,data')),
+    getAllRows(() => db.from(T.products).select('id,client_id,rev,data').order('id')),
     get(db.from(T.clients).select('*')),
-    get(db.from(T.profiles).select('*').order('created_at', { ascending: true })),
+    getAllRows(() => db.from(T.profiles).select('*').order('created_at', { ascending: true })),
     get(db.from(T.audit).select('*').order('at', { ascending: false }).limit(AUDIT_LIMIT)),
     get(db.from(T.settings).select('*')),
-    get(db.from(T.notes).select('*')),
+    getAllRows(() => db.from(T.notes).select('*').order('id')),
   ]);
   const setting = (k) => settings.find((s) => s.key === k)?.value;
+  const revs = new Map(products.map((r) => [r.id, Number(r.rev) || 0]));
   const systems = products.map(productFromRow).filter(Boolean).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   return {
     empty: !products.length && !clients.length,
-    systems, clients: clients.map(clientFromRow), users: users.map(profileFromRow), audit: audit.map(auditFromRow),
+    revs, systems, clients: clients.map(clientFromRow), users: users.map(profileFromRow), audit: audit.map(auditFromRow),
     notes: notes.map(noteFromRow), settings: setting('settings'), bankOverrides: setting('bankOverrides'),
   };
+}
+
+// Full backup (administrator): every row the signed-in administrator can read, as one JSON document.
+// scripts/backup-to-sql.mjs turns it into SQL that puts missing rows back.
+export async function exportAll(db) {
+  const tables = {};
+  for (const [name, order] of [['v2_clients', 'id'], ['v2_profiles', 'id'], ['v2_products', 'id'], ['v2_notes', 'id'], ['v2_settings', 'key'], ['v2_audit', 'id'], ['v2_ledger', 'seq'], ['v2_client_errors', 'id']]) {
+    try { tables[name] = await getAllRows(() => db.from(name).select('*').order(order)); }
+    catch (e) { tables[name] = { error: e.message }; }
+  }
+  return { format: 'governai-backup', version: 1, exportedAt: new Date().toISOString(), tables };
+}
+
+// Older audit entries, on request (the newest AUDIT_LIMIT load at sign-in).
+export async function loadAuditBefore(db, at, n = 500) {
+  const { data, error } = await db.from(T.audit).select('*').lt('at', at).order('at', { ascending: false }).limit(n);
+  if (error) throw new Error(error.message || 'Database error');
+  return (data || []).map(auditFromRow);
 }
 
 // "Reset to demo data" (administrator): rewrites only the demo organisations and their products.

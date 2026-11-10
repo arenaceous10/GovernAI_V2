@@ -109,7 +109,8 @@ export default function NewAssessment({ nav, existing }) {
     const fixed = fixedQuestions(prof, fws, overrides, custom);
     const target = adaptiveTarget(fixed.length);
     let adaptive = []; let src = 'Rule-based tailoring';
-    if (state.settings.aiQuestions) {
+    const orgAi = state.clients.find((c) => c.id === (existing?.clientId || state.clientOrg))?.aiQuestions !== false;
+    if (state.settings.aiQuestions && orgAi) {
       // Names the AI must never see, on top of the product's own name, owner and business unit.
       const known = [...state.clients.map((c) => c.name), ...(state.users || []).map((u) => u.name), state.me?.name].filter(Boolean);
       // The endpoint only answers signed-in clients and administrators, so send the session token.

@@ -44,5 +44,11 @@
     "api/connector.js": {
       "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/health",
+      "schedule": "17 3 * * *"
+    }
+  ]
 }

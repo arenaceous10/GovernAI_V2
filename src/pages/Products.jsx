@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Download, Search, Trash2 } from 'lucide-react';
 import { TIERS, TIER_ORDER } from '../data/frameworks.js';
 import { STAGES, STAGE_STATUS } from '../data/lifecycle.js';
-import { Panel, TierBadge, StatusPill, fmtDate } from '../components/ui.jsx';
+import { Panel, TierBadge, StatusPill, fmtDate, useShowMore } from '../components/ui.jsx';
 import { StageMini } from '../components/Stages.jsx';
 import { useStore } from '../store/store.jsx';
 
@@ -21,6 +21,7 @@ export default function Products({ nav }) {
     && (!tier || s.assessment.results.tier === tier) && (!stage || String(s.stage) === stage) && (!cl || s.clientId === cl)),
   [systems, q, tier, stage, cl]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [shownProducts, moreProducts] = useShowMore(rows);
   function exportCsv() {
     const data = [['Code', 'Client', 'Product', 'Owner', 'Tier', 'Score', 'Controls in place %', 'Stage', 'Stage status', 'Status'],
       ...rows.map((s) => [s.code, cname(s.clientId), s.name, s.owner, TIERS[s.assessment.results.tier].label, s.assessment.results.residual, s.assessment.results.readiness, `${s.stage}. ${STAGES[s.stage - 1].name}`, STAGE_STATUS[s.stages?.[s.stage]?.status || 'open'], s.status])];
@@ -66,7 +67,7 @@ export default function Products({ nav }) {
           <table className="table">
             <thead><tr><th>Product</th><th>Tier</th><th>Score</th><th>Controls in place</th><th>Stage</th><th>Stage status</th></tr></thead>
             <tbody>
-              {rows.map((s) => {
+              {shownProducts.map((s) => {
                 const r = s.assessment.results;
                 return (
                   <tr key={s.id} className="click" onClick={() => nav(`/product/${s.id}`)}>
@@ -81,6 +82,7 @@ export default function Products({ nav }) {
               })}
             </tbody>
           </table>
+          {moreProducts}
           {rows.length === 0 && <div className="empty">No products match.</div>}
         </div>
       </Panel>

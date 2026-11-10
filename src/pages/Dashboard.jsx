@@ -20,6 +20,10 @@ const waitsFor = (s, role) => { const w = waitingOn(s); return w.includes(role) 
 const overdue = (s) => s.stage === 7 && s.nextReview && s.nextReview < today();
 
 // What needs this role now (also used by tests and other pages).
+// Dashboards show the first few items of each list; the full lists are on their own pages.
+const BOARD_MAX = 12;
+const LIST_MAX = 24;
+
 export function attention(systems, role) {
   const out = [];
   for (const s of systems) {
@@ -58,10 +62,10 @@ function PipelineBoard({ systems, nav, showClient, highlight }) {
             <div className="board-head"><b>{ph.name}</b><span className="xs mute">{ph.stages.length > 1 ? 'Stages' : 'Stage'} {ph.stages[0]}{ph.stages.length > 1 ? `–${ph.stages[ph.stages.length - 1]}` : ''}</span><span className="count-chip num">{items.length}</span></div>
             <div className="board-list">
               {items.length === 0 && <div className="board-empty">None</div>}
-              {items.map((s, i) => {
+              {items.slice(0, BOARD_MAX).map((s, i) => {
                 const label = stageLabel(s); const hot = highlight?.(s);
                 return (
-                  <button key={s.id} type="button" className={`board-card ${hot ? 'hot' : ''}`} style={{ animationDelay: `${i * 40}ms` }} onClick={() => nav(`/product/${s.id}`)}>
+                  <button key={s.id} type="button" className={`board-card ${hot ? 'hot' : ''}`} style={{ animationDelay: `${Math.min(i, 10) * 40}ms` }} onClick={() => nav(`/product/${s.id}`)}>
                     <div className="spread" style={{ alignItems: 'flex-start' }}>
                       <b className="bc-name">{s.name}</b><TierBadge tier={s.assessment.results.tier} />
                     </div>
@@ -70,6 +74,7 @@ function PipelineBoard({ systems, nav, showClient, highlight }) {
                   </button>
                 );
               })}
+              {items.length > BOARD_MAX && <button type="button" className="btn ghost sm board-more" onClick={() => nav('/products')}>{items.length - BOARD_MAX} more in AI products</button>}
             </div>
           </div>
         );
@@ -85,11 +90,11 @@ function ReviewList({ systems, role, nav, empty }) {
   if (!rows.length) return <div className="empty-sm"><CheckCircle2 size={22} /> {empty}</div>;
   return (
     <div className="worklist">
-      {rows.map((s, i) => {
+      {rows.slice(0, LIST_MAX).map((s, i) => {
         const rec = s.stages[s.stage]; const age = daysSince(rec.submittedAt); const p = progress(s);
         const gate = requiredApprovals(s.stage, s.assessment.results.tier).includes('lead');
         return (
-          <button key={s.id} type="button" className="work-item" style={{ animationDelay: `${i * 50}ms` }} onClick={() => nav(`/product/${s.id}`)}>
+          <button key={s.id} type="button" className="work-item" style={{ animationDelay: `${Math.min(i, 10) * 50}ms` }} onClick={() => nav(`/product/${s.id}`)}>
             <span className="stage-chip">{s.stage}</span>
             <span className="wi-main">
               <b>{s.name}</b>
@@ -102,6 +107,7 @@ function ReviewList({ systems, role, nav, empty }) {
           </button>
         );
       })}
+      {rows.length > LIST_MAX && <div className="xs mute" style={{ padding: '8px 4px' }}>{rows.length - LIST_MAX} more in the review queue.</div>}
     </div>
   );
 }
@@ -133,10 +139,10 @@ function ClientHome({ nav }) {
         <div className="section-head"><h2>Your next steps</h2><span className="xs mute">Most urgent first</span></div>
         {next.length + drafts.length === 0 ? <div className="panel empty-sm"><CheckCircle2 size={22} /> You're up to date. The governance team has everything it needs.</div> : (
           <div className="next-grid">
-            {next.map((s, i) => {
+            {next.slice(0, LIST_MAX).map((s, i) => {
               const rec = s.stages[s.stage]; const p = progress(s); const ret = rec.status === 'returned';
               return (
-                <button key={s.id} type="button" className={`next-card ${ret ? 'ret' : ''}`} style={{ animationDelay: `${i * 60}ms` }} onClick={() => nav(`/product/${s.id}`)}>
+                <button key={s.id} type="button" className={`next-card ${ret ? 'ret' : ''}`} style={{ animationDelay: `${Math.min(i, 10) * 60}ms` }} onClick={() => nav(`/product/${s.id}`)}>
                   <div className="spread" style={{ alignItems: 'flex-start' }}>
                     <div style={{ minWidth: 0 }}>
                       <div className="eyebrow">{ret ? 'Returned, action needed' : `Stage ${s.stage} of 10`}</div>

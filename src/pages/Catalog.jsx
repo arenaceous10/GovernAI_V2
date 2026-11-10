@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { CLASSIFICATIONS } from '../data/lifecycle.js';
-import { Panel, Pill, Stat, TierBadge } from '../components/ui.jsx';
+import { Panel, Pill, Stat, TierBadge, useShowMore } from '../components/ui.jsx';
 import { catalogCoverage } from '../components/DataAssets.jsx';
 import { useStore } from '../store/store.jsx';
 
@@ -25,6 +25,7 @@ export default function Catalog({ nav }) {
   const rows = assets.filter((d) => (!q || `${d.name} ${d.sourceSystem} ${d.owner} ${d.steward}`.toLowerCase().includes(q.toLowerCase()))
     && (!cls || d.classification === cls)
     && (!gap || (gap === 'catalog' && !d.catalogued) || (gap === 'lineage' && !d.lineage) || (gap === 'steward' && !d.steward) || (gap === 'quality' && !d.qualityChecked) || (gap === 'personal' && d.personal)));
+  const [shownAssets, moreAssets] = useShowMore(rows);
   return (
     <div>
       <div className="page-head">
@@ -51,7 +52,7 @@ export default function Catalog({ nav }) {
           <table className="table">
             <thead><tr><th>Dataset</th><th>Source system</th><th>Class</th><th>Owner and steward</th><th>Catalog</th><th>Lineage</th><th>Quality</th><th>Used by</th></tr></thead>
             <tbody>
-              {rows.map((d) => (
+              {shownAssets.map((d) => (
                 <tr key={`${d.name}|${d.sourceSystem}`}>
                   <td><b style={{ fontWeight: 500 }}>{d.name}</b><div className="xs mute">{d.role}{d.personal ? ', personal data' : ''}</div></td>
                   <td className="small">{d.sourceSystem}</td>
@@ -69,6 +70,7 @@ export default function Catalog({ nav }) {
               ))}
             </tbody>
           </table>
+          {moreAssets}
           {rows.length === 0 && <div className="empty">No datasets match. Register datasets from a system's Data & lineage tab.</div>}
         </div>
       </Panel>

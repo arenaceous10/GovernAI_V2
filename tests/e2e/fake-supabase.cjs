@@ -3,11 +3,11 @@
 // supabase/migrations/003_auth_rbac.sql, so tests see what each role would really get back.
 const HOST = 'https://fake.supabase.co';
 const PASSWORD = 'Passw0rd!';
-const KEYS = { v2_products: 'id', v2_clients: 'id', v2_users: 'id', v2_settings: 'key', v2_audit: 'id', v2_profiles: 'id', v2_notes: 'id', v2_ledger: 'hash' };
+const KEYS = { v2_products: 'id', v2_clients: 'id', v2_users: 'id', v2_settings: 'key', v2_audit: 'id', v2_profiles: 'id', v2_notes: 'id', v2_ledger: 'hash', v2_client_errors: 'id' };
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*', 'access-control-expose-headers': '*' };
 
 const newDb = () => ({
-  tables: { v2_products: [], v2_clients: [], v2_users: [], v2_audit: [], v2_settings: [], v2_profiles: [], v2_notes: [], v2_ledger: [] },
+  tables: { v2_products: [], v2_clients: [], v2_users: [], v2_audit: [], v2_settings: [], v2_profiles: [], v2_notes: [], v2_ledger: [], v2_client_errors: [] },
   accounts: [], tokens: {}, autoConfirm: true, fail: null, failStorage: false, nextId: 1, calls: [], files: {}, denied: [],
 });
 
@@ -126,18 +126,20 @@ const canWrite = (u, t, r, existing, method) => {
     case 'v2_notes': return method === 'DELETE' ? u.role === 'admin' : ['assessor', 'lead', 'admin'].includes(u.role);
     case 'v2_audit': return method === 'DELETE' ? u.role === 'admin' : (!r.org || r.org === u.client || u.team);
     case 'v2_ledger': return false;   // written only by the database
+    case 'v2_client_errors': return method === 'DELETE' ? u.role === 'admin' : true;   // 011: anyone signed in reports their own
     default: return u.role === 'admin';   // clients, profiles, settings, users
   }
 };
 
 function matches(row, params) {
   for (const [k, v] of params) {
-    if (['select', 'order', 'limit', 'on_conflict', 'columns'].includes(k)) continue;
+    if (['select', 'order', 'limit', 'offset', 'on_conflict', 'columns'].includes(k)) continue;
     const [op, ...rest] = v.split('.'); const val = rest.join('.');
     const cell = row[k];
     if (op === 'eq' && String(cell) !== val) return false;
     if (op === 'neq' && String(cell) === val) return false;
     if (op === 'gte' && !(Number(cell) >= Number(val))) return false;
+    if (op === 'lt' && !(String(cell) < val)) return false;
     if (op === 'in') { const list = val.replace(/^\(|\)$/g, '').split(',').map((x) => x.replace(/^"|"$/g, '')); if (!list.includes(String(cell))) return false; }
   }
   return true;
@@ -244,7 +246,7 @@ function installRest(context, db) {
       let out = rows.filter((r) => canRead(u, table, r)).filter((r) => matches(r, params));
       const order = url.searchParams.get('order');
       if (order) { const [col, dir] = order.split('.'); out = [...out].sort((a, b) => (typeof a[col] === 'number' && typeof b[col] === 'number' ? a[col] - b[col] : String(a[col]).localeCompare(String(b[col]))) * (dir === 'desc' ? -1 : 1)); }
-      const limit = url.searchParams.get('limit'); if (limit) out = out.slice(0, Number(limit));
+      const offset = Number(url.searchParams.get('offset') || 0); const limit = url.searchParams.get('limit'); if (offset || limit) out = out.slice(offset, limit ? offset + Number(limit) : undefined);
       const single = /vnd\.pgrst\.object/.test(req.headers().accept || '');
       if (single) return out.length ? json(route, 200, out[0]) : json(route, 406, { code: 'PGRST116', message: 'no rows' });
       return json(route, 200, out);
@@ -260,6 +262,10 @@ function installRest(context, db) {
         // Like Postgres: INSERT ... ON CONFLICT DO UPDATE checks the proposed row against the INSERT policy too.
         if (upsert && existing && !canWrite(u, table, r, null, method)) return deny(r[key]);
         if (!canWrite(u, table, r, existing, method)) return deny(r[key]);
+        // Mirror of 010_product_versions.sql: a save must start from the stored version.
+        if (table === 'v2_products' && existing && 'rev' in r && Number(r.rev) !== Number(existing.rev || 0)) {
+          return json(route, 400, { code: '40001', message: `Someone else changed ${existing.data?.name || existing.id} while you were working on it` });
+        }
         // Mirror of 008_withdrawal_guard.sql for people outside the governance team.
         if (table === 'v2_products' && existing && !u.team) {
           if (existing.data?.status === 'Withdrawn') return json(route, 400, { code: '42501', message: 'This product was withdrawn: only the governance team can change it' });
@@ -270,11 +276,12 @@ function installRest(context, db) {
       }
       for (const r of list) {
         const before = table === 'v2_products' ? rows.find((x) => x[key] === r[key]) : null;
-        if (upsert) { const i = rows.findIndex((x) => x[key] === r[key]); if (i >= 0) rows[i] = { ...rows[i], ...r }; else rows.push({ ...r }); }
-        else rows.push({ id: table === 'v2_audit' ? db.nextId++ : r.id, ...r });
+        if (upsert) { const i = rows.findIndex((x) => x[key] === r[key]); if (i >= 0) rows[i] = { ...rows[i], ...r, ...(table === 'v2_products' ? { rev: Number(rows[i].rev || 0) + 1 } : {}) }; else rows.push({ ...r, ...(table === 'v2_products' ? { rev: 0 } : {}) }); }
+        else rows.push({ id: ['v2_audit', 'v2_client_errors'].includes(table) ? db.nextId++ : r.id, ...r, ...(table === 'v2_client_errors' ? { at: new Date().toISOString(), user_id: u.id } : {}) });
         if (table === 'v2_products') ledgerProduct(db, before ? JSON.parse(JSON.stringify(before)) : null, rows.find((x) => x[key] === r[key]), u.role);
         if (table === 'v2_audit') { const p = db.tables.v2_products.find((x) => x.id === r.target); if (p) ledgerAppend(db, p.id, p.client_id, 'audit', { action: r.action, detail: r.detail, by: r.actor_name, role: r.actor, at: r.at }, u.role); }
       }
+      if (/return=representation/.test(req.headers().prefer || '')) return json(route, 201, list.map((r) => rows.find((x) => x[key] === r[key])).filter(Boolean));
       return route.fulfill({ status: 201, headers: CORS, body: '' });
     }
     if (method === 'PATCH') {
@@ -305,6 +312,7 @@ function installApi(context, db) {
     const row = db.tables.v2_products.find((r) => r.id === body.productId && canRead(u, 'v2_products', r));
     return { req, u, body, row };
   };
+  context.route('**/api/health', (route) => send(route, 200, { ok: true, database: 'up', ms: 12, configured: { database: true, aiQuestions: false, evidenceSigning: true, modelConnector: true }, build: 'test' }));
   const evidence = context.route('**/api/evidence', async (route) => {
     const { u, row } = await ctx(route);
     if (!u.role) return send(route, 401, { error: 'Sign in first' });

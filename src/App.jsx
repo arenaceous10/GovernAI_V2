@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import PageBoundary from './components/PageBoundary.jsx';
+import { setErrorRole } from './lib/errors.js';
 import { LogOut, BookOpen, BookMarked, ClipboardCheck, Database, FilePlus2, History, LayoutDashboard, Library, ListChecks, Settings, Boxes, Users, Activity } from 'lucide-react';
 import { ROLES } from './data/lifecycle.js';
 import { useStore, waitingOn } from './store/store.jsx';
@@ -52,6 +54,7 @@ const EXTRA = { client: ['product', 'draft', 'reassess', 'card', 'verify'], asse
 export default function App() {
   const { role, setRole, state, systems, client, sync, me, signOut } = useStore();
   const [route, nav] = useHashRoute();
+  useEffect(() => { setErrorRole(role); }, [role]);
   if (!role) return <Landing />;
 
   const items = NAV[role];
@@ -108,7 +111,7 @@ export default function App() {
         <div className="side-foot">
           <div className={`sync ${sync.error ? 'bad' : sync.mode === 'local' ? 'warn' : ''}`} role="status">
             <i aria-hidden />
-            {sync.error ? <span>Not saved. <button onClick={sync.retry}>Retry</button></span> : sync.mode === 'local' ? 'Demo data in this browser' : 'Saved'}
+            {sync.error ? <span title={sync.error}>Not saved. <button onClick={sync.retry}>Retry</button></span> : sync.mode === 'local' ? 'Demo data in this browser' : 'Saved'}
           </div>
           <div className="who"><span className="xs mute">Signed in as</span><b>{me?.name || ROLES[role].name}</b>{me && <span className="xs mute who-sub">{ROLES[role].name}{role === 'client' && client ? ` · ${client.name}` : ''}</span>}</div>
           {sync.mode === 'local' && (
@@ -127,7 +130,15 @@ export default function App() {
           <button className="btn ghost sm" style={{ marginTop: 6 }} onClick={async () => { await signOut(); window.location.hash = ''; }}><LogOut size={14} /> Sign out</button>
         </div>
       </aside>
-      <main className="main" key={go}>{page}</main>
+      <main className="main" key={go}>
+        {sync.notice && (
+          <div className="sync-notice" role="alert">
+            <span>{sync.notice}.</span>
+            <button className="btn sm" onClick={sync.dismiss}>OK</button>
+          </div>
+        )}
+        <PageBoundary key={go} where={go} onHome={() => nav(home)}>{page}</PageBoundary>
+      </main>
       <Toaster />
     </div>
   );

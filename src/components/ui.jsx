@@ -230,3 +230,17 @@ export function ParticleField({ density = 0.00009, className = '' }) {
   }, [density]);
   return <canvas ref={ref} className={`particles ${className}`} aria-hidden="true" />;
 }
+
+// Long lists render in pages of `step` rows with a "Show more" button, so a portfolio of hundreds of products
+// (or thousands of actions and audit entries) stays quick to draw.
+export function useShowMore(list, step = 100) {
+  const [n, setN] = useState(step);
+  const shown = list.length > n ? list.slice(0, n) : list;
+  const more = list.length > n ? (
+    <div className="show-more">
+      <span className="xs mute">Showing {n} of {list.length}</span>
+      <button type="button" className="btn sm" onClick={() => setN(n + step)}>Show {Math.min(step, list.length - n)} more</button>
+    </div>
+  ) : null;
+  return [shown, more];
+}

@@ -16,6 +16,7 @@ Indicative assessment, not legal advice.
 - [How a product moves through GovernAI](#how-a-product-moves-through-governai)
 - [Features](#features)
 - [Security and privacy](#security-and-privacy)
+- [Running it in production](#running-it-in-production)
 - [Tests](#tests)
 - [Layout](#layout)
 
@@ -76,6 +77,8 @@ beside any other tables in the project; the older tables (`use_cases`, `checklis
 | `007_ledger_and_ops.sql` | Tamper-evident record (`v2_ledger`) written by triggers, and client branding. Existing products get a starting entry. |
 | `008_withdrawal_guard.sql` | Clients may request or cancel a withdrawal; only the governance team decides, and withdrawn products are frozen for clients. |
 | `009_test_sweep_fixes.sql` | A live product unblocked by a re-assessment returns to production; retired products are frozen for clients; closed stage rounds are not recorded as removals; repeated identical log entries are each recorded. |
+| `010_product_versions.sql` | A version number on each product: a save made over someone else's newer save is refused instead of overwriting it. |
+| `011_operations.sql` | Error reports from people's screens (administrators read them), the `gov_health()` check, and the per-organisation AI switch. |
 
 Saving: every change is saved as it happens. A failure shows "Not saved" with Retry in the sidebar. Other people's changes
 appear when the tab regains focus. In Supabase Auth settings, keep email confirmation on and turn on leaked-password protection.
@@ -90,6 +93,7 @@ policy, no framing, no MIME sniffing, strict referrer and permissions policies).
 | `api/generate-questions.js` | Tailored questions from Gemini, for signed-in users, rate-limited, with personal data removed first. |
 | `api/evidence.js` | `GET`: the public key that checks evidence packs. `POST`: a signed pack for one product the caller may see. |
 | `api/connector.js` | Seals a registry token, tests a registry connection, reads model versions and metrics. |
+| `api/health.js` | Public `GET`: is the database answering, and which server features are set up (true or false only). Called daily by the Vercel cron in `vercel.json`. |
 
 Every function checks the caller's Supabase session and reads with that person's own token, so row-level security limits
 what it can see.
@@ -212,6 +216,53 @@ identifiers, never pasted into SQL text.
 - **Exports**: reports escape all values, and CSV exports neutralise spreadsheet formulas.
 - **Files** open only from safe link types.
 
+## Running it in production
+
+**Two people on the same product.** Each product carries a version number. A save must start from the version the
+screen loaded; if a colleague saved first, the save is refused, the screen loads the colleague's version and says so,
+and the person makes the change again. Screens also pick up other people's changes every minute and when the tab
+comes back into focus, so collisions are rare.
+
+**Large portfolios.** Tables show 100 rows at a time with "Show more"; dashboards show the first items of each list;
+the audit log loads the newest 800 entries and older ones on request. Whole tables are read in pages, so nothing is
+cut off at the database's 1,000-row limit. Measured with `N=1500 node tests/e2e/scale.cjs` (local, no network):
+1,500 products and 20,000 audit entries sign in in about 3 seconds for an administrator and every page opens in under
+half a second. Product data is about 34 KB each before compression (about 6 MB compressed for 1,000 products), so
+sign-in time on a real connection grows with portfolio size.
+
+**System health** (Settings, administrators, signed-in mode): whether the server and database answer, which server
+features are set up, the last 50 errors from people's screens (personal details scrubbed, at most 30 an hour per
+person, kept 60 days), and a full backup download.
+
+**Keep-alive and monitoring.** `vercel.json` calls `/api/health` once a day, which keeps a free Supabase project from
+pausing after a week without activity. Point a free uptime monitor (for example UptimeRobot) at `/api/health` too: it
+answers 200 when the database is up and 503 when it is not.
+
+**Backups.** Settings > System health > Download a full backup gives one JSON file with everything an administrator
+can read. To put missing rows back: `node scripts/backup-to-sql.mjs backup.json > restore.sql`, then run `restore.sql`
+in the Supabase SQL editor. Existing rows are left alone, running it twice changes nothing, and the tamper-evident
+record is restored row for row, so it still verifies. Evidence files live in Supabase Storage and are not in the JSON;
+download them from the Storage page if you need a copy.
+
+**AI per organisation.** In Clients and users, the "AI on / AI off" button per organisation. Off means that
+organisation's descriptions are never sent to the AI service (the server refuses too); its questions come from the
+rules engine.
+
+**Load test.** `node scripts/load-test.mjs https://your-site 300 20` reads the app page and `/api/health` 300 times,
+20 at once, and reports median, 95th percentile and failures. It never signs in or writes.
+
+**Free steps outside the app**
+
+1. Supabase, Authentication, Attack Protection: turn on leaked password protection.
+2. Supabase, Authentication, Emails, SMTP settings: connect a free email service (Resend, Brevo and others have free
+   tiers). The built-in sender only allows a few emails an hour, which sign-ups and password resets soon exceed.
+3. A free uptime monitor on `/api/health`.
+4. A weekly backup download.
+
+**Paid items that remain** (not done here): Vercel Pro for commercial use, a paid Supabase plan (point-in-time
+backups, no pausing, higher limits), a paid Gemini tier (inputs not used for training), single sign-on, an external
+penetration test, a legal review of the regulatory content.
+
 ## Tests
 
 The fuzz suites (`tests/fuzz`) generate random products, answers, people and requests and check rules that must
@@ -242,6 +293,9 @@ node tests/e2e/cloud.cjs
 node tests/e2e/evidence.cjs                # upload, open as reviewer, replace, remove evidence files
 node tests/e2e/bugs.cjs                    # double-click approve, access turned off, search, notifications
 node tests/e2e/questions.cjs               # admin adds questions, client sees them
+node tests/e2e/concurrency.cjs             # two people saving the same product
+node tests/e2e/operations.cjs              # system health, error reports, backup, older audit entries, AI per organisation
+N=1000 node tests/e2e/scale.cjs            # timings with a large portfolio
 node tests/e2e/clients.cjs                 # client administration
 node tests/e2e/proof.cjs                   # record, signed packs, public check, Word drafts, registry, operations, branding
 node tests/e2e/withdraw.cjs                # withdrawal request, decision, archive, restore, permanent deletion

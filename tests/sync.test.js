@@ -9,17 +9,17 @@ function fakeDb({ failOn = null } = {}) {
   const db = {
     t, failOn,
     from(name) {
-      const f = []; let op = 'select'; let payload; let ord = null; let lim = null;
+      const f = []; let op = 'select'; let payload; let ord = null; let lim = null; let rng = null;
       const q = {
-        select() { op = 'select'; return q; }, order(c, o) { ord = [c, o.ascending]; return q; }, limit(n) { lim = n; return q; },
+        select() { if (op !== 'upsert') op = 'select'; return q; }, order(c, o = {}) { ord = [c, o.ascending !== false]; return q; }, limit(n) { lim = n; return q; }, range(a, b) { rng = [a, b]; return q; },
         upsert(r) { op = 'upsert'; payload = r; return q; }, insert(r) { op = 'insert'; payload = r; return q; }, delete() { op = 'delete'; return q; },
         in(c, v) { f.push((r) => v.includes(r[c])); return q; }, neq(c, v) { f.push((r) => r[c] !== v); return q; }, gte(c, v) { f.push((r) => r[c] >= v); return q; },
         then(res, rej) {
           return Promise.resolve().then(() => {
             if (db.failOn && db.failOn === `${op}:${name}`) { db.failOn = null; return { data: null, error: { message: `injected ${op} failure` } }; }
             const rows = t[name];
-            if (op === 'select') { let o = rows.filter((r) => f.every((x) => x(r))); if (ord) o = [...o].sort((a, b) => String(a[ord[0]]).localeCompare(String(b[ord[0]])) * (ord[1] ? 1 : -1)); if (lim) o = o.slice(0, lim); return { data: o, error: null }; }
-            if (op === 'upsert') { for (const r of payload) { const i = rows.findIndex((x) => x[keys[name]] === r[keys[name]]); if (i >= 0) rows[i] = { ...rows[i], ...r }; else rows.push({ ...r }); } return { error: null }; }
+            if (op === 'select') { let o = rows.filter((r) => f.every((x) => x(r))); if (ord) o = [...o].sort((a, b) => String(a[ord[0]]).localeCompare(String(b[ord[0]])) * (ord[1] ? 1 : -1)); if (lim) o = o.slice(0, lim); if (rng) o = o.slice(rng[0], rng[1] + 1); return { data: o, error: null }; }
+            if (op === 'upsert') { const list = Array.isArray(payload) ? payload : [payload]; for (const r of list) { const i = rows.findIndex((x) => x[keys[name]] === r[keys[name]]); if (i >= 0) rows[i] = { ...rows[i], ...r }; else rows.push({ ...r }); } return { data: list, error: null }; }
             if (op === 'insert') { for (const r of payload) rows.push({ id: id++, ...r }); return { error: null }; }
             t[name] = rows.filter((r) => !f.every((x) => x(r))); return { error: null };
           }).then(res, rej);
@@ -114,4 +114,12 @@ test('signed-in mode never writes people from the browser', () => {
   const a = state();
   const ops = diffState(a, { ...a, users: [...a.users, { id: 'u9', name: 'X', email: 'x@y.z', role: 'admin' }] }, { users: false });
   assert.equal(ops.users.length, 0);
+});
+
+test('loading reads every product even past the database\'s 1,000-row page', async () => {
+  const db = fakeDb();
+  for (let i = 0; i < 2345; i++) db.t.v2_products.push({ id: `p${String(i).padStart(5, '0')}`, client_id: 'c', rev: i % 3, data: { id: `p${i}`, stage: 1, status: 'Draft', createdAt: '2026-01-01' } });
+  const got = await loadAll(db);
+  assert.equal(got.systems.length, 2345);
+  assert.equal(got.revs.size, 2345);
 });

@@ -8,6 +8,9 @@ import './styles.css';
 import App from './App.jsx';
 import { StoreProvider } from './store/store.jsx';
 import { VerifyPage } from './components/Proof.jsx';
+import { installErrorReporting } from './lib/errors.js';
+
+installErrorReporting();
 
 // Pages anyone may open without signing in.
 function Root() {

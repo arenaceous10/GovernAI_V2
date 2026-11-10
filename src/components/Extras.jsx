@@ -189,7 +189,7 @@ export function DeadlineRadar({ systems, nav, limit = 5 }) {
   return (
     <ol className="radar">
       {items.map((d, k) => (
-        <li key={d.id} className={`rd rd-${urgency(d.days)}`} style={{ animationDelay: `${k * 60}ms` }}>
+        <li key={d.id} className={`rd rd-${urgency(d.days)}`} style={{ animationDelay: `${Math.min(k, 10) * 60}ms` }}>
           <div className="rd-when"><b className="num">{label(d.days)}</b><span className="xs">{fmtD(d.date)}</span></div>
           <div className="rd-main">
             <div className="small"><b>{d.title}</b></div>

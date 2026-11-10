@@ -3,7 +3,7 @@ import { FRAMEWORKS, SELECTABLE_FRAMEWORKS, TIER_ORDER, PRINCIPLES, PRINCIPLE_ID
 import { LEVEL_NAMES, LEVEL_SCORES } from '../data/questionBank.js';
 import { ROLES, STAGES, CORE_RULE, GATE_STAGES } from '../data/lifecycle.js';
 import { ADAPTIVE_SHARE } from '../engine/engine.js';
-import { Panel, Pill, TierBadge, fmtDate } from '../components/ui.jsx';
+import { Panel, Pill, TierBadge, fmtDate, useShowMore } from '../components/ui.jsx';
 import { useStore, waitingOn } from '../store/store.jsx';
 
 export function ReviewQueue({ nav }) {
@@ -14,6 +14,7 @@ export function ReviewQueue({ nav }) {
   const mine = submitted.filter((s) => { const w = waitingOn(s); return w.includes(role) || (role === 'lead' && w.includes('assessor')); });
   const returned = systems.filter((s) => s.stages?.[s.stage]?.status === 'returned');
   const rows = tab === 'mine' ? mine : tab === 'all' ? submitted : returned;
+  const [shownRows, moreRows] = useShowMore(rows);
   return (
     <div>
       <div className="page-head"><div><h1>Review queue</h1></div></div>
@@ -28,7 +29,7 @@ export function ReviewQueue({ nav }) {
             <table className="table">
               <thead><tr><th>Product</th><th>Client</th><th>Stage</th><th>Tier</th><th>Evidence</th><th>{tab === 'returned' ? 'Returned because' : 'Waiting for'}</th><th>Submitted</th></tr></thead>
               <tbody>
-                {rows.map((s) => {
+                {shownRows.map((s) => {
                   const rec = s.stages[s.stage]; const st = STAGES[s.stage - 1];
                   const ev = st.evidence.filter((i) => rec.evidence[i]).length;
                   return (
@@ -45,6 +46,7 @@ export function ReviewQueue({ nav }) {
                 })}
               </tbody>
             </table>
+            {moreRows}
           </div>
         )}
       </Panel>
@@ -58,7 +60,9 @@ export function ActionsPage({ nav }) {
   const today = new Date().toISOString().slice(0, 10);
   const all = systems.filter((s) => s.assessment).flatMap((s) => s.actions.map((a) => ({ ...a, s })))
     .filter((a) => (status === 'open' ? a.status !== 'Done' : status === 'overdue' ? a.status !== 'Done' && a.due < today : a.status === 'Done'))
-    .sort((a, b) => a.due.localeCompare(b.due));
+    .sort((a, b) => String(a.due || '').localeCompare(String(b.due || '')));
+  const cnames = new Map(state.clients.map((c) => [c.id, c.name]));
+  const [shownActions, moreActions] = useShowMore(all);
   return (
     <div>
       <div className="page-head">
@@ -72,12 +76,12 @@ export function ActionsPage({ nav }) {
           <table className="table">
             <thead><tr><th>Priority</th><th>Action</th><th>Product</th>{role !== 'client' && <th>Client</th>}<th>Owner</th><th>Due</th><th>Status</th></tr></thead>
             <tbody>
-              {all.map((a) => (
-                <tr key={a.id} className="click" onClick={() => nav(`/product/${a.s.id}`)}>
+              {shownActions.map((a) => (
+                <tr key={`${a.s.id}|${a.id}`} className="click" onClick={() => nav(`/product/${a.s.id}`)}>
                   <td><Pill tone={{ High: 'bad', Medium: 'warn', Low: 'ok' }[a.priority]}>{a.priority}</Pill></td>
                   <td style={{ maxWidth: 380 }}><b style={{ fontWeight: 500 }}>{a.topic}</b><div className="small mute">{a.action}</div></td>
                   <td className="small">{a.s.name}</td>
-                  {role !== 'client' && <td className="small">{state.clients.find((c) => c.id === a.s.clientId)?.name}</td>}
+                  {role !== 'client' && <td className="small">{cnames.get(a.s.clientId)}</td>}
                   <td className="small">{a.owner || <span className="mute">Unassigned</span>}</td>
                   <td className={`num small ${a.status !== 'Done' && a.due < today ? 'tone-bad' : ''}`}>{a.due}</td>
                   <td><Pill tone={a.status === 'Done' ? 'good' : a.status === 'In progress' ? 'ok' : 'mute'}>{a.status}</Pill></td>
@@ -86,6 +90,7 @@ export function ActionsPage({ nav }) {
             </tbody>
           </table>
           {all.length === 0 && <div className="empty">No actions in this view.</div>}
+          {moreActions}
         </div>
       </Panel>
     </div>
@@ -93,10 +98,20 @@ export function ActionsPage({ nav }) {
 }
 
 export function AuditLog() {
-  const { state } = useStore();
+  const { state, loadOlderAudit, sync } = useStore();
   const [who, setWho] = useState('');
-  const name = (id) => state.systems.find((s) => s.id === id)?.name || (id ? 'Deleted draft' : '—');
+  const [older, setOlder] = useState({ busy: false, done: false, error: '' });
+  const names = new Map(state.systems.map((s) => [s.id, s.name]));
+  const name = (id) => names.get(id) || (id ? 'Deleted draft' : '—');
+  const cnames = new Map(state.clients.map((c) => [c.id, c.name]));
   const rows = state.audit.filter((x) => !who || x.actor === who);
+  const [shown, more] = useShowMore(rows, 200);
+  // The newest 800 entries load at sign-in; older ones come from the database on request.
+  const loadOlder = async () => {
+    setOlder({ busy: true, done: false, error: '' });
+    try { const n = await loadOlderAudit(); setOlder({ busy: false, done: n === 0, error: '' }); }
+    catch (e) { setOlder({ busy: false, done: false, error: e.message || 'Could not load older entries' }); }
+  };
   return (
     <div>
       <div className="page-head">
@@ -110,10 +125,10 @@ export function AuditLog() {
           <table className="table">
             <thead><tr><th>When</th><th>Role</th><th>Action</th><th>Product</th><th>Detail</th></tr></thead>
             <tbody>
-              {rows.map((x, i) => (
+              {shown.map((x, i) => (
                 <tr key={i}>
                   <td className="small num" style={{ whiteSpace: 'nowrap' }}>{x.at.slice(0, 16).replace('T', ' ')}</td>
-                  <td className="small">{ROLES[x.actor]?.name || x.actor}{x.org && <div className="xs mute">{state.clients.find((c) => c.id === x.org)?.name}</div>}</td>
+                  <td className="small">{ROLES[x.actor]?.name || x.actor}{x.org && <div className="xs mute">{cnames.get(x.org)}</div>}</td>
                   <td className="small">{x.action}</td>
                   <td className="small">{name(x.target)}</td>
                   <td className="small mute">{x.detail}</td>
@@ -122,6 +137,13 @@ export function AuditLog() {
             </tbody>
           </table>
           {rows.length === 0 && <div className="empty">No entries.</div>}
+          {more}
+          {!more && sync.mode === 'cloud' && (
+            <div className="show-more">
+              <span className="xs mute">{older.error || (older.done ? 'No older entries.' : `Showing the newest ${state.audit.length} entries.`)}</span>
+              {!older.done && <button type="button" className="btn sm" disabled={older.busy} onClick={loadOlder}>{older.busy ? 'Loading…' : 'Load older entries'}</button>}
+            </div>
+          )}
         </div>
       </Panel>
     </div>

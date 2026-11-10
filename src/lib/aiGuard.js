@@ -38,8 +38,11 @@ export async function guard(req, { env = process.env, fetchImpl = fetch, now = D
   // Names the model must never see, known on the server: the caller's own name and organisation.
   const known = [prof.name, ...String(prof.name || '').split(/\s+/).filter((w) => w.length >= 3), user.email?.split('@')[0]];
   if (prof.client_id) {
-    const c = await fetchImpl(`${url}/rest/v1/v2_clients?select=name&id=eq.${encodeURIComponent(prof.client_id)}`, { headers: h });
-    if (c.ok) known.push(...((await c.json()) || []).map((r) => r.name));
+    const c = await fetchImpl(`${url}/rest/v1/v2_clients?select=name,ai_questions&id=eq.${encodeURIComponent(prof.client_id)}`, { headers: h });
+    const rows = c.ok ? (await c.json()) || [] : [];
+    // The administrator can turn AI questions off for one organisation: its descriptions are then never sent.
+    if (rows.some((r) => r.ai_questions === false)) return { ok: false, status: 403, error: 'AI questions are turned off for your organisation' };
+    known.push(...rows.map((r) => r.name));
   }
   return { ok: true, userId: user.id, known: known.filter(Boolean) };
 }

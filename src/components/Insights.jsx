@@ -7,7 +7,7 @@ import { TIERS, TIER_ORDER, PRINCIPLE_IDS } from '../data/frameworks.js';
 import { STAGES, STAGE_STATUS } from '../data/lifecycle.js';
 import { controlStatus, compassScores, COMPASS, COMPASS_IDS, itemState } from '../data/controls.js';
 import { PrincipleRadar } from './Results.jsx';
-import { Panel, TierBadge, StatusPill } from './ui.jsx';
+import { Panel, TierBadge, StatusPill, useShowMore } from './ui.jsx';
 import { stageLabel } from './Stages.jsx';
 import { useStore } from '../store/store.jsx';
 
@@ -45,17 +45,20 @@ export default function ClientInsights({ systems, nav }) {
     const states = st.checklist.map((i) => itemState(rec, i));
     const pct = (k) => Math.round((states.filter((x) => x === k).length / states.length) * 100);
     return { id: s.id, name: s.name.length > 22 ? `${s.name.slice(0, 21)}…` : s.name, full: s.name, Ticked: pct('done'), Skipped: pct('skipped'), Open: pct('open'), stage: s.stage };
-  });
+  }).sort((a, b) => b.Open - a.Open).slice(0, 12);   // the 12 with most left to do; a chart of hundreds of bars is unreadable
   const avg = (xs) => { const v = xs.filter((x) => x != null); return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null; };
   const principleAvg = Object.fromEntries(PRINCIPLE_IDS.map((k) => [k, { risk: avg(list.map((s) => s.assessment.results.principles[k]?.risk)), readiness: avg(list.map((s) => s.assessment.results.principles[k]?.readiness)) }]));
-  const compass = COMPASS_IDS.map((k) => ({ k, name: COMPASS[k].name, v: avg(list.map((s) => compassScores(s).scores[k])) }));
-  const gaps = list.reduce((n, s) => n + controlStatus(s, rules).filter((c) => c.status === 'Gap' || c.status === 'Partial').length, 0);
+  // Compass scores and control gaps are worked out once per product list, not on every render.
+  const compassOf = useMemo(() => new Map(list.map((s) => [s.id, compassScores(s).scores])), [systems]); // eslint-disable-line react-hooks/exhaustive-deps
+  const compass = COMPASS_IDS.map((k) => ({ k, name: COMPASS[k].name, v: avg(list.map((s) => compassOf.get(s.id)?.[k])) }));
+  const gaps = useMemo(() => list.reduce((n, s) => n + controlStatus(s, rules).filter((c) => c.status === 'Gap' || c.status === 'Partial').length, 0), [systems, rules]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filtered = list.filter((s) => !f
     || (f.kind === 'stage' && s.stage === f.value && s.status !== 'Retired')
     || (f.kind === 'status' && statusOf(s) === f.value)
     || (f.kind === 'tier' && s.assessment.results.tier === f.value)
-    || (f.kind === 'compass' && (compassScores(s).scores[f.value] ?? 100) < 50));
+    || (f.kind === 'compass' && (compassOf.get(s.id)?.[f.value] ?? 100) < 50));
+  const [shownList, moreList] = useShowMore(filtered);
 
   if (!list.length) return null;
   return (
@@ -170,7 +173,7 @@ export default function ClientInsights({ systems, nav }) {
           <table className="table">
             <thead><tr><th>Product</th><th>Tier</th><th>Stage</th><th>Status</th><th className="num">Score</th><th className="num">Controls</th><th className="num">Open actions</th><th /></tr></thead>
             <tbody>
-              {filtered.map((s) => (
+              {shownList.map((s) => (
                 <tr key={s.id} className="click" onClick={() => nav(`/product/${s.id}`)}>
                   <td><b style={{ fontWeight: 500 }}>{s.name}</b><div className="xs mute">{s.code}</div></td>
                   <td><TierBadge tier={s.assessment.results.tier} /></td>
@@ -184,6 +187,7 @@ export default function ClientInsights({ systems, nav }) {
               ))}
             </tbody>
           </table>
+          {moreList}
           {filtered.length === 0 && <div className="empty">No products match this filter.</div>}
         </div>
       </Panel>

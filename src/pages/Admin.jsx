@@ -8,6 +8,7 @@ import { sectionName } from '../engine/engine.js';
 import { Field, Panel, Pill } from '../components/ui.jsx';
 import { useStore } from '../store/store.jsx';
 import { toast } from '../components/Extras.jsx';
+import SystemHealth from '../components/SystemHealth.jsx';
 
 const emailOk = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 
@@ -116,8 +117,9 @@ function People() {
 
 // One organisation: view, edit in place, or delete with a clear account of what goes with it.
 function ClientRow({ c }) {
-  const { state, updateClient, deleteClient } = useStore();
+  const { state, updateClient, deleteClient, setClientAi } = useStore();
   const [mode, setMode] = useState('view');   // view | edit | delete
+  const aiOn = c.aiQuestions !== false;
   const [f, setF] = useState({ name: c.name, sector: c.sector || '', contact: c.contact || '' });
   const [typed, setTyped] = useState('');
   const [err, setErr] = useState('');
@@ -151,6 +153,9 @@ function ClientRow({ c }) {
         <td><span className="row" style={{ gap: 8, flexWrap: 'nowrap' }}>{c.brand?.logo ? <img className="client-logo-sm" src={c.brand.logo} alt="" /> : c.brand?.color ? <i className="brand-dot" style={{ background: c.brand.color }} aria-hidden /> : null}<b style={{ fontWeight: 500 }}>{c.name}</b></span></td><td className="small">{c.sector}</td><td className="small">{c.contact}</td><td className="num">{live}</td>
         <td>
           <div className="row" style={{ gap: 4, flexWrap: 'nowrap', justifyContent: 'flex-end' }}>
+            <button className={`btn ghost sm ${aiOn ? '' : 'ai-off'}`} aria-pressed={aiOn} aria-label={`AI questions for ${c.name}: ${aiOn ? 'on' : 'off'}`}
+              title={aiOn ? 'AI-written questions on for this organisation. Click to turn off.' : 'AI-written questions off: this organisation\'s descriptions are never sent to the AI service. Click to allow.'}
+              onClick={() => { setClientAi(c.id, !aiOn); toast(`AI questions ${aiOn ? 'turned off' : 'allowed'} for ${c.name}`); }}>{aiOn ? 'AI on' : 'AI off'}</button>
             <button className="btn ghost sm" aria-label={`Branding for ${c.name}`} onClick={() => setMode(mode === 'brand' ? 'view' : 'brand')}><Palette size={14} /></button>
             <button className="btn ghost sm" aria-label={`Edit ${c.name}`} onClick={() => { setMode('edit'); setErr(''); }}><Pencil size={14} /></button>
             <button className="btn ghost sm" aria-label={`Delete ${c.name}`} onClick={() => { setMode(mode === 'delete' ? 'view' : 'delete'); setTyped(''); setErr(''); }}><Trash2 size={14} /></button>
@@ -423,7 +428,7 @@ export function AdminBank() {
 }
 
 export function AdminSettings() {
-  const { state, setSetting, resetDemo } = useStore();
+  const { state, setSetting, resetDemo, sync } = useStore();
   const [confirm, setConfirm] = useState(false);
   const en = state.settings.enabledFrameworks || SELECTABLE_FRAMEWORKS;
   return (
@@ -471,6 +476,7 @@ export function AdminSettings() {
         </div>
       </div>
       <ChecklistRules />
+      {sync.mode === 'cloud' && <SystemHealth />}
     </div>
   );
 }

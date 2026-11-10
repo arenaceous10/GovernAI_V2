@@ -1119,3 +1119,14 @@ h1, h2, h3 { text-wrap: balance; }
 .ss-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 .uc-line { max-width: 520px; margin-top: 2px; }
 .withdraw-box { margin: 12px 0; } .withdraw-row { margin: 10px 0 2px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; } .withdraw-row > .panel { width: 100%; }
+
+/* Why the screen was reloaded: a save refused by a rule, or overtaken by someone else's save. */
+.sync-notice { display: flex; align-items: center; gap: 12px; justify-content: space-between; margin: 0 0 16px; padding: 10px 14px; border-radius: 8px; border-left: 3px solid var(--warn); background: var(--warn-bg); color: var(--warn-ink); font-size: 14px; }
+
+.show-more { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 4px 4px; }
+.board-more { width: 100%; text-align: center; }
+.btn.ai-off { color: var(--warn-ink); background: var(--warn-bg); }
+.health-list, .error-list { list-style: none; margin: 0; padding: 0; }
+.health-list li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line-2); }
+.error-list li { padding: 8px 0; border-top: 1px solid var(--line-2); }
+.error-list pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; padding: 8px; background: var(--paper); border-radius: 6px; max-height: 160px; overflow: auto; }
