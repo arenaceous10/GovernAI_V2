@@ -99,7 +99,9 @@ export function packSnapshot(p) {
   const rounds = p.rounds ? p.rounds.map((rd) => ({ ...rd, record: clean(rd.record) })) : undefined;
   const card = p.card ? { ...p.card, versions: undefined } : undefined;
   const connector = p.connector ? { kind: p.connector.kind, host: p.connector.host, model: p.connector.model, versions: p.connector.versions, lastSync: p.connector.lastSync } : undefined;
-  return { ...p, stages, rounds, card, connector };
+  // Evidence attached to control answers: names and links stay, file contents do not.
+  const assessment = p.assessment?.evidence ? { ...p.assessment, evidence: Object.fromEntries(Object.entries(p.assessment.evidence).map(([k, v]) => [k, strip(v)])) } : p.assessment;
+  return { ...p, assessment, stages, rounds, card, connector };
 }
 
 // The text that is signed: the pack without its signature, keys sorted.

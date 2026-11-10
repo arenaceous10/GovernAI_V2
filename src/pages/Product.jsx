@@ -6,7 +6,7 @@ import { TIERS, DOMAINS, SOURCING, PRINCIPLES, selectionLabel, systemTypeLabel }
 import { geoName } from '../data/countries.js';
 import { STAGES, stageOf, requiredApprovals, ROLES, STAGE_STATUS, GATE_STAGES, ON_DEMAND, phaseOf } from '../data/lifecycle.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
-import { sectionOf, sectionOrder } from '../engine/engine.js';
+import { sectionOf, sectionOrder, isStaged, isProvisional, controlGaps } from '../engine/engine.js';
 import { controlFor, itemState, isMandatory, validReason, controlStatus, stageCompletion, SKIP_REASONS, MIN_REASON, COMPASS, COMPASS_IDS } from '../data/controls.js';
 import { downloadReport } from '../engine/report.js';
 import { downloadDeck } from '../engine/deck.js';
@@ -46,7 +46,7 @@ async function openFile(v, setErr) {
   }
 }
 
-function EvidenceItem({ item, value, editable, onSave, systemId, stage }) {
+export function EvidenceItem({ item, value, editable, onSave, systemId, stage }) {
   const [open, setOpen] = useState(false);
   const [ref, setRef] = useState(value?.ref || '');
   const [busy, setBusy] = useState(false);
@@ -417,6 +417,9 @@ function Assessment({ s, nav }) {
           <dt>Countries</dt><dd>{p.geos.map(geoName).join(', ')}</dd>
           <dt>Frameworks</dt><dd>{fws.map(fwName).join(', ')}</dd>
           <dt>Assessed</dt><dd>{fmtDate(a.at)}</dd>
+          <dt>Controls</dt><dd>{isStaged(a)
+            ? <>{a.questions.length ? (a.controlsConfirmedAt ? `Confirmed by the governance team on ${fmtDate(a.controlsConfirmedAt)}` : 'Not yet confirmed by the governance team') : 'Not started'} <button type="button" className="btn sm" style={{ marginLeft: 8 }} onClick={() => nav(`/controls/${s.id}`)}>Control assessment</button></>
+            : 'Self-declared at registration, before control answers needed evidence'}</dd>
         </dl>
       </Panel>
       {sectionOrder(fws).map((k) => {
@@ -432,8 +435,10 @@ function Assessment({ s, nav }) {
                     return (
                       <tr key={q.id}>
                         <td style={{ maxWidth: 460 }}>{q.q}<div className="xs mute">{PRINCIPLES[q.principle]?.short}{q.kind !== 'core' ? ', tailored' : ''}</div></td>
-                        <td className="small" style={{ maxWidth: 300 }}>{v === 'na' ? 'Not applicable' : v === 'unknown' ? 'Not known: scored as not in place until confirmed' : q.options[v]}</td>
-                        <td>{v === 'na' ? <Pill>N/A</Pill> : v === 'unknown' ? <Pill tone="warn">Not known</Pill> : <Pill tone={['bad', 'warn', 'ok', 'good'][v]}>{LEVEL_NAMES[v]}</Pill>}</td>
+                        <td className="small" style={{ maxWidth: 300 }}>{v == null ? '' : v === 'na' ? 'Not applicable' : v === 'unknown' ? 'Not known: scored as not in place until confirmed' : q.options[v]}</td>
+                        <td>{v == null ? <Pill tone="warn">Not answered</Pill> : v === 'na' ? <Pill>N/A</Pill> : v === 'unknown' ? <Pill tone="warn">Not known</Pill> : <Pill tone={['bad', 'warn', 'ok', 'good'][v]}>{LEVEL_NAMES[v]}</Pill>}
+                          {a.review?.[q.id] && typeof v === 'number' && a.review[q.id].rating < v && <div className="xs" style={{ marginTop: 4 }}>Governance rating: <b>{LEVEL_NAMES[a.review[q.id].rating]}</b></div>}
+                          {a.evidence?.[q.id] && <div className="xs mute" style={{ marginTop: 4 }}>{a.evidence[q.id].file || a.evidence[q.id].ref}</div>}</td>
                       </tr>
                     );
                   })}
@@ -785,6 +790,24 @@ function Withdrawal({ s, nav }) {
   );
 }
 
+// Where the control assessment stands, for products that answer their controls at stage 2.
+function ControlsBanner({ s, nav }) {
+  const { role } = useStore();
+  const a = s.assessment;
+  if (!isStaged(a) || ['Retired', 'Withdrawn', 'Blocked'].includes(s.status)) return null;
+  const g = controlGaps(a);
+  const client = CAN.work(role);
+  const open = (label) => <button type="button" className="btn sm" style={{ marginLeft: 10 }} onClick={() => nav(`/controls/${s.id}`)}>{label}</button>;
+  const left = [g.unanswered ? `${g.unanswered} to answer` : '', g.unsupported ? `${g.unsupported} need evidence` : ''].filter(Boolean).join(', ');
+  if (!g.started) {
+    if (!client) return null;
+    return <div className={`callout ${s.stage >= 2 ? 'warn' : ''}`} style={{ marginBottom: 14 }}><b>Control assessment not started.</b> {s.stage >= 2 ? 'Stage 2 cannot be submitted without it.' : 'It is needed at stage 2. You can start it now.'}{open('Start')}</div>;
+  }
+  if (!g.complete) return <div className="callout warn" style={{ marginBottom: 14 }}><b>Control assessment: {left}.</b>{s.stage === 2 ? ' Stage 2 cannot be submitted until it is complete.' : ''}{open(client ? 'Continue' : 'Open')}</div>;
+  if (isProvisional(a)) return <div className="callout" style={{ marginBottom: 14 }}><b>Control assessment complete.</b> The tier stays provisional until the governance team approves stage 2.{open(client ? 'Open' : 'Review control answers')}</div>;
+  return null;
+}
+
 export default function Product({ id, nav, back }) {
   const { getSystem, state, role } = useStore();
   const [tab, setTab] = useState('lifecycle');
@@ -802,7 +825,7 @@ export default function Product({ id, nav, back }) {
       <button className="btn ghost back" onClick={() => nav(back)}><ArrowLeft size={16} /> Back</button>
       <section className="product-hero">
         <div style={{ minWidth: 0 }}>
-          <div className="row"><h1>{s.name}</h1><TierBadge tier={r.tier} /></div>
+          <div className="row"><h1>{s.name}</h1><TierBadge tier={r.tier} />{isProvisional(s.assessment) && <span className="tag" title="Based on the risk profile alone until the governance team approves stage 2. It can only come down.">Provisional</span>}</div>
           <p className="mute small" style={{ marginTop: 4 }}>{[s.code, role !== 'client' && client ? client.name : '', s.owner ? `Owner ${s.owner}` : '', s.bu].filter(Boolean).join(', ')}</p>
         </div>
         <div className="hero-stage">
@@ -820,6 +843,7 @@ export default function Product({ id, nav, back }) {
         </div>
       </section>
       <Withdrawal s={s} nav={nav} />
+      <ControlsBanner s={s} nav={nav} />
       <Tabs value={tab} onChange={setTab} tabs={[['lifecycle', 'Lifecycle'], ['overview', 'Risk and score'], ['assessment', 'Assessment'], ['data', 'Data and lineage'], ['actions', `Actions (${open})`], ['history', 'History'], ['record', 'Record']]} />
       <div key={tab} className="fade-in">
         {tab === 'overview' && <Results results={r} frameworks={s.assessment.frameworks} />}

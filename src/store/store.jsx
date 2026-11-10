@@ -9,6 +9,8 @@ import { AuthScreen, PendingScreen } from '../pages/Auth.jsx';
 import { removeEvidence } from '../lib/files.js';
 import { requiredApprovals, nextStage, stageOf, ROLES } from '../data/lifecycle.js';
 import { TIERS, SELECTABLE_FRAMEWORKS } from '../data/frameworks.js';
+import { rescore, buildActions, controlGaps, effectiveAnswers, isStaged, isProvisional } from '../engine/engine.js';
+import { LEVEL_NAMES } from '../data/questionBank.js';
 import { controlFor, controlById, isMandatory, itemState, validReason, SKIP_REASONS } from '../data/controls.js';
 
 const KEY = 'governai.v4';
@@ -82,6 +84,15 @@ export function stageBlockers(sys, rules = {}) {
   const out = [];
   if (mand.length) out.push(`${mand.length} mandatory check${mand.length > 1 ? 's' : ''} still to tick`);
   if (opt) out.push(`${opt} optional check${opt > 1 ? 's' : ''} to tick, or skip with the "Skip with reason" button on its row`);
+  // Products registered with the risk profile only answer their control questions here, with evidence.
+  if (sys.stage === 2 && isStaged(sys.assessment)) {
+    const g = controlGaps(sys.assessment);
+    if (!g.started) out.push('Control assessment not started');
+    else {
+      if (g.unanswered) out.push(`${g.unanswered} control question${g.unanswered > 1 ? 's' : ''} still to answer`);
+      if (g.unsupported) out.push(`${g.unsupported} control answer${g.unsupported > 1 ? 's' : ''} still need${g.unsupported > 1 ? '' : 's'} evidence`);
+    }
+  }
   return out;
 }
 
@@ -108,6 +119,35 @@ export function archiveRound(x, n) {
   const rec = x.stages?.[n];
   if (!hasContent(rec)) return x.rounds || [];
   return [...(x.rounds || []), { stage: n, closedAt: nowIso(), record: rec }].slice(-60);
+}
+
+
+// Rebuild the score and the open gap actions from the assessment as it stands. Finished actions, and actions that
+// did not come from the assessment (skipped checks and the like), are kept.
+export function withScore(x, cutoffs = {}, note = false) {
+  const a = x.assessment;
+  const results = rescore(a, cutoffs);
+  const fresh = buildActions(a.questions || [], effectiveAnswers(a.answers, a.review), results.tier, new Date(), a.profile);
+  const fromAssessment = (k) => k.source === 'assessment' || k.source === 'unknown';
+  const keep = (x.actions || []).filter((k) => k.status === 'Done' || !fromAssessment(k));
+  const open = (x.actions || []).filter((k) => k.status !== 'Done' && fromAssessment(k));
+  // An open action for the same question keeps its id, owner and due date.
+  const merged = fresh.filter((f) => !keep.some((k) => k.qid === f.qid && k.status === 'Done')).map((f) => {
+    const old = open.find((k) => k.qid === f.qid);
+    return old ? { ...f, id: old.id, owner: old.owner, due: old.due } : f;
+  });
+  const last = (x.history || []).at(-1);
+  const moved = !last || last.tier !== results.tier || last.residual !== results.residual || last.readiness !== results.readiness;
+  return {
+    ...x, assessment: { ...a, results }, actions: [...merged, ...keep],
+    history: note && moved ? [...(x.history || []), { at: nowIso(), tier: results.tier, inherent: results.inherent, residual: results.residual, readiness: results.readiness }] : x.history,
+  };
+}
+
+// Approving stage 2 confirms the control assessment: from here the controls count towards the tier.
+function confirmControls(before, after, cutoffs) {
+  if (before.stage !== 2 || after.stages?.[2]?.status !== 'approved' || !isProvisional(after.assessment)) return after;
+  return withScore({ ...after, assessment: { ...after.assessment, controlsConfirmedAt: nowIso() } }, cutoffs, true);
 }
 
 function advanceFrom(x, n, conditions = '') {
@@ -392,17 +432,61 @@ export function StoreProvider({ children, standalone = null }) {
           const first = !prev.assessment;
           const keepDone = (prev.actions || []).filter((a) => a.status === 'Done');
           const stage1 = first ? { ...newStage(), checklist: { 'The use case is entered into the inventory.': true, 'Initial risk classification and review path are complete.': true } } : null;
-          const sys = {
+          let sys = {
             ...prev, ...meta, draft: null, updatedAt: nowIso(), assessment,
             status: r.tier === 'unacceptable' ? 'Blocked' : first ? 'Active' : prev.status === 'Blocked' ? (live ? 'In production' : 'Active') : prev.status,
             stages: first ? { 1: stage1 } : prev.stages,
             actions: [...actions.filter((a) => !keepDone.some((k) => k.qid === a.qid)), ...keepDone],
             history: [...(prev.history || []), { at: nowIso(), tier: r.tier, inherent: r.inherent, residual: r.residual, readiness: r.readiness }],
           };
+          // Risk-profile-only registrations: open actions that did not come from the assessment are kept.
+          if (isStaged(assessment)) sys = { ...withScore({ ...sys, actions: prev.actions || [] }, s.settings.cutoffs), history: sys.history };
           const list = exists ? s.systems.map((x) => (x.id === newId ? sys : x)) : [sys, ...s.systems];
-          return log({ ...s, systems: list }, first ? 'Registered' : 'Re-assessed', newId, `${meta.name}: ${TIERS[r.tier].label} risk, score ${r.residual}`);
+          return log({ ...s, systems: list }, first ? 'Registered' : 'Re-assessed', newId, `${meta.name}: ${TIERS[r.tier].label} risk${r.provisional ? ' (provisional)' : ''}, score ${r.residual}`);
         });
         return newId;
+      },
+
+
+      // ----- control assessment (stage 2) -----
+      // The client answers the control questions and attaches evidence. Saving part-way is allowed; the stage
+      // cannot be submitted until every question is answered and backed as required.
+      saveControls: (id, { questions, answers, evidence, source }) => CAN.work(state.role) && updateSystem(id, (x, s) => {
+        const a = x.assessment;
+        if (!isStaged(a) || x.status === 'Draft' || !Array.isArray(questions) || !questions.length) return x;
+        if (x.stages?.[x.stage]?.status === 'submitted' && x.stage === 2) return x;   // with the governance team
+        const ids = new Set(questions.map((q) => q.id));
+        const pick = (o) => Object.fromEntries(Object.entries(o || {}).filter(([k, v]) => ids.has(k) && v != null && v !== ''));
+        const nextAnswers = pick(answers);
+        // Reviewer ratings are never touched here: the score takes the lower of the two, so a rating simply stops
+        // mattering once the client's own answer is at or below it.
+        const next = { ...a, questions, answers: nextAnswers, evidence: pick(evidence), questionSource: source || a.questionSource || '', controlsAt: nowIso() };
+        if (JSON.stringify([a.questions, a.answers, a.evidence || {}]) === JSON.stringify([next.questions, next.answers, next.evidence])) return x;
+        return withScore({ ...x, updatedAt: nowIso(), assessment: next }, s.settings.cutoffs, controlGaps(next).complete);
+      }, 'Control assessment saved', () => {
+        const n = (questions || []).length; const done = (questions || []).filter((q) => answers?.[q.id] != null && answers[q.id] !== '').length;
+        const ev = (questions || []).filter((q) => evidence?.[q.id] && (evidence[q.id].file || evidence[q.id].ref)).length;
+        return `${done} of ${n} answered, ${ev} with evidence`;
+      }),
+      // The reviewer records a lower rating beside the client's, with a reason. Ratings cannot be raised.
+      rateControl: (id, qid, rating, reason) => {
+        if (!CAN.review(state.role)) return 'Only the governance team can rate a control';
+        const x = state.systems.find((y) => y.id === id);
+        const a = x?.assessment; const q = a?.questions?.find((y) => y.id === qid);
+        if (!x || !q || ARCHIVED.includes(x.status)) return 'This control cannot be rated now';
+        if (rating == null) {
+          if (!a.review?.[qid]) return '';
+          updateSystem(id, (y, s) => { const review = { ...(y.assessment.review || {}) }; delete review[qid]; return withScore({ ...y, updatedAt: nowIso(), assessment: { ...y.assessment, review } }, s.settings.cutoffs, true); },
+            'Reviewer rating removed', q.topic || qid);
+          return '';
+        }
+        const mine = a.answers?.[qid];
+        if (typeof mine !== 'number' || !Number.isInteger(rating) || rating < 0 || rating >= mine) return 'A reviewer can only lower a rating';
+        const why = String(reason || '').trim();
+        if (why.length < 10) return 'Give a reason of at least 10 characters';
+        updateSystem(id, (y, s) => withScore({ ...y, updatedAt: nowIso(), assessment: { ...y.assessment, review: { ...(y.assessment.review || {}), [qid]: { rating, reason: why.slice(0, 500), by: s.role, byName: s.me?.name || null, at: nowIso() } } } }, s.settings.cutoffs, true),
+          'Control rating lowered', `${q.topic || qid}: ${LEVEL_NAMES[mine]} to ${LEVEL_NAMES[rating]}. ${why.slice(0, 160)}`);
+        return '';
       },
 
       // ----- lifecycle -----
@@ -483,16 +567,16 @@ export function StoreProvider({ children, standalone = null }) {
           const approvals = { ...rec.approvals, [role]: { outcome, comment, at: nowIso() } };
           const withApproval = { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...rec, approvals, log: log2 } } };
           const done = need.every((r) => approvals[r] && approvals[r].outcome !== 'Returned');
-          y = done ? advanceFrom(withApproval, n, outcome === 'Approved with conditions' ? comment : '') : withApproval;
+          y = done ? confirmControls(x, advanceFrom(withApproval, n, outcome === 'Approved with conditions' ? comment : ''), s.settings.cutoffs) : withApproval;
         }
         const next = { ...s, systems: s.systems.map((z) => (z.id === id ? y : z)), notes: note ? [...(s.notes || []), note] : s.notes };
         return log(next, `Stage ${outcome === 'Returned' ? 'returned' : 'approved'}`, id, `Stage ${n}${comment ? `: ${comment}` : ''}`);
       }),
       override: (id, n, reason) => CAN.override(state.role) && updateSystem(id, (x) => {
         if (x.stage !== n || ['Retired', 'Withdrawn', 'Blocked', 'Draft'].includes(x.status) || x.stages?.[n]?.status === 'approved') return x;
-        return advanceFrom({
+        return confirmControls(x, advanceFrom({
           ...x, stages: { ...x.stages, [n]: { ...(x.stages[n] || newStage()), log: [...(x.stages[n]?.log || []), { at: nowIso(), who: 'lead', outcome: 'Overridden', comment: reason }], approvals: { ...(x.stages[n]?.approvals || {}), lead: { outcome: 'Approved with conditions', comment: `Override: ${reason}`, at: nowIso() } } } },
-        }, n, `Override: ${reason}`);
+        }, n, `Override: ${reason}`), state.settings.cutoffs);
       }, 'Gate overridden', `Stage ${n}: ${reason}`),
       startEvent: (id, kind, text) => CAN.raiseEvent(state.role) && updateSystem(id, (x) => {
         const to = { change: 8, incident: 9, retire: 10 }[kind];

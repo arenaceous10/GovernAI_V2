@@ -72,9 +72,9 @@ export default function Products({ nav }) {
                 return (
                   <tr key={s.id} className="click" onClick={() => nav(`/product/${s.id}`)}>
                     <td><b style={{ fontWeight: 500 }}>{s.name}</b><div className="xs mute">{role !== 'client' ? `${cname(s.clientId)}, ` : ''}{s.code}</div></td>
-                    <td><TierBadge tier={r.tier} /></td>
+                    <td><TierBadge tier={r.tier} />{r.provisional && <div className="xs mute">Provisional</div>}</td>
                     <td className="num">{r.residual}</td>
-                    <td className="num">{r.readiness}%</td>
+                    <td className="num">{r.questionCount ? `${r.readiness}%` : <span className="xs mute">Not assessed</span>}</td>
                     <td><StageMini s={s} /></td>
                     <td><StatusPill status={s.status === 'Blocked' || s.status === 'Retired' ? s.status : STAGE_STATUS[s.stages?.[s.stage]?.status || 'open']} /></td>
                   </tr>

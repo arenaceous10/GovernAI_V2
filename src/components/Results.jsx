@@ -89,13 +89,13 @@ export default function Results({ results, frameworks }) {
       <Panel>
         <div className="grid g-wide" style={{ alignItems: 'center' }}>
           <div>
-            <div className="verdict"><span className="big" style={{ color: t.color }}>{t.label} risk</span><span className="mute">score {results.residual}/100</span></div>
+            <div className="verdict"><span className="big" style={{ color: t.color }}>{t.label} risk</span>{results.provisional && <span className="tag">Provisional</span>}<span className="mute">score {results.residual}/100</span></div>
             <p className="mute small" style={{ marginTop: 6 }}>{t.meaning}</p>
             <div style={{ marginTop: 40 }}><RiskScale inherent={results.inherent} residual={results.residual} tier={results.tier} cut={c} /></div>
           </div>
           <div className="grid g2" style={{ gap: 10 }}>
-            <div className="panel stat"><div className="v num">{results.residual}</div><div className="l">Risk score, after controls</div></div>
-            <div className="panel stat"><div className="v num">{results.readiness}%</div><div className="l">Controls in place</div></div>
+            <div className="panel stat"><div className="v num">{results.residual}</div><div className="l">{results.provisional ? 'Risk score, before controls' : 'Risk score, after controls'}</div></div>
+            <div className="panel stat"><div className="v num">{results.questionCount ? `${results.readiness}%` : '—'}</div><div className="l">{!results.questionCount ? 'Controls: assessed at stage 2' : results.provisional ? 'Controls declared, not yet confirmed' : 'Controls in place'}</div></div>
             <div className="panel stat"><div className="v num">{results.dg.level || '—'}<span className="small mute">/5</span></div><div className="l">Data governance maturity</div></div>
             <div className="panel stat"><div className="v num" style={{ color: results.criticalGaps.length ? 'var(--bad)' : undefined }}>{results.criticalGaps.length}</div><div className="l">Critical gaps</div></div>
           </div>

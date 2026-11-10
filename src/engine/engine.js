@@ -341,6 +341,59 @@ export function evidenceSummary(questions, answers, evidence = {}, review = {}) 
   return out;
 }
 
+// ---------- control assessment (stage 2) ----------
+// Products registered with the risk profile only (assessment.flow === 2) answer the control questions at stage 2.
+export const FLOW = 2;
+export const isStaged = (a) => a?.flow === FLOW;
+export const isProvisional = (a) => isStaged(a) && !a.controlsConfirmedAt;
+export const isLinkRef = (v) => /^https?:\/\/\S+$/i.test(String(v || '').trim());
+
+// What an answer must be backed by: 'proof' (a file or a link), 'reference' (a line saying where it is
+// documented or who owns it, or a file) or null. "Evidenced" always needs proof. "In place" needs a reference,
+// and proof when the control is critical and the risk profile alone puts the product at High or above.
+export function evidenceNeed(q, answer, inherentTier) {
+  if (answer === 3) return 'proof';
+  if (answer === 2) return q.weight === 3 && ['high', 'unacceptable'].includes(inherentTier) ? 'proof' : 'reference';
+  return null;
+}
+export function evidenceMet(need, ev) {
+  if (!need) return true;
+  if (need === 'proof') return !!(ev && (String(ev.file || '').trim() || isLinkRef(ev.ref)));
+  return hasEvidence(ev);
+}
+
+// The reviewer can lower a rating, never raise it. The score uses the lower of the two.
+export function effectiveAnswers(answers = {}, review = {}) {
+  const out = { ...answers };
+  for (const [id, r] of Object.entries(review || {})) {
+    if (typeof out[id] === 'number' && Number.isInteger(r?.rating) && r.rating >= 0 && r.rating < out[id]) out[id] = r.rating;
+  }
+  return out;
+}
+
+// What is still missing from a control assessment.
+export function controlGaps(a) {
+  const qs = a?.questions || []; const ans = a?.answers || {}; const ev = a?.evidence || {};
+  const tier = a?.results?.inherentTier;
+  const unanswered = qs.filter((q) => ans[q.id] == null || ans[q.id] === '');
+  const unsupported = qs.filter((q) => !evidenceMet(evidenceNeed(q, ans[q.id], tier), ev[q.id]));
+  return { started: qs.length > 0, total: qs.length, unanswered: unanswered.length, unsupported: unsupported.length,
+    unansweredIds: unanswered.map((q) => q.id), unsupportedIds: unsupported.map((q) => q.id),
+    complete: qs.length > 0 && !unanswered.length && !unsupported.length };
+}
+
+// After the risk profile or frameworks change: keep the questions still in scope, add fixed ones now required.
+export function refreshQuestions(prev, profile, fws, overrides = {}, custom = []) {
+  const kept = (prev || []).filter((q) => inScope(q, fws));
+  const have = new Set(kept.map((q) => q.id));
+  return orderQuestions([...kept, ...fixedQuestions(profile, fws, overrides, custom).filter((q) => !have.has(q.id))], fws);
+}
+
+// Score a product's assessment as it stands: reviewer ratings applied, provisional until stage 2 is approved.
+export function rescore(a, customCutoffs = {}) {
+  return scoreAssessment(a.profile, a.frameworks, a.questions || [], effectiveAnswers(a.answers, a.review), customCutoffs, { provisional: isProvisional(a) });
+}
+
 // ---------- scoring ----------
 export function answerScore(q, a) {
   if (a === 'na' || a == null || a === '') return null;
@@ -370,7 +423,10 @@ export function maturityLevel(s) {
 
 export const riskLabel = (r) => (r >= 67 ? 'High' : r >= 34 ? 'Medium' : 'Low');
 
-export function scoreAssessment(profile, fws, questions, answers, customCutoffs = {}) {
+// opts.provisional: the governance team has not yet confirmed the controls (stage 2 not approved), so the tier
+// rests on inherent risk alone. Controls can only lower the score, so a provisional tier is never more lenient.
+export function scoreAssessment(profile, fws, questions, answers, customCutoffs = {}, opts = {}) {
+  const provisional = !!opts.provisional;
   const pr = principleRisk(profile);
   const inherent = inherentScore(pr);
   const legal = legalClass(profile, fws);
@@ -404,7 +460,8 @@ export function scoreAssessment(profile, fws, questions, answers, customCutoffs 
     principles[p] = { risk: pr[p].risk, rating: pr[p].rating, readiness, controls: mine.length, items: pr[p].items };
   }
   const readiness = weightedMean(answered.map((x) => ({ w: x.q.weight, s: x.s }))) ?? 0;
-  const residual = Math.round(inherent * (1 - READINESS_CREDIT * (readiness / 100)));
+  const declaredResidual = Math.round(inherent * (1 - READINESS_CREDIT * (readiness / 100)));
+  const residual = provisional ? inherent : declaredResidual;
   const floor = severe.length >= 3 ? 'high' : 'minimal';
 
   const inherentTier = [legal.tier, band(inherent, cut), floor].reduce(stricter);
@@ -412,7 +469,9 @@ export function scoreAssessment(profile, fws, questions, answers, customCutoffs 
 
   const reasons = [`Risk score ${inherent}/100 across the six Responsible AI principles`];
   reasons.push(`Cut-offs from ${cut.from.length ? cut.from.map((f) => FRAMEWORKS[f].name).join(', ') : 'the default policy'}: Limited at ${cut.limited}, High at ${cut.high}`);
-  reasons.push(`Controls in place (${readiness}%) bring the score to ${residual}/100: ${TIERS[band(residual, cut)].label} band`);
+  if (!provisional) reasons.push(`Controls in place (${readiness}%) bring the score to ${residual}/100: ${TIERS[band(residual, cut)].label} band`);
+  else if (!questions.length) reasons.push('Provisional: controls are assessed at stage 2. Until then the tier rests on the risk profile alone, and it can only come down');
+  else reasons.push(`Provisional: the controls declared so far (${readiness}%) would bring the score to ${declaredResidual}/100. They count once the governance team approves stage 2`);
   if (legal.tier !== 'minimal' || profile.prohibited?.length) reasons.push(`Legal floor: ${TIERS[legal.tier].label}. ${legal.reason}`);
   if (severe.length >= 3) reasons.push(`Floor to High: ${severe.map((p) => PRINCIPLES[p].name).join(', ')} at severe risk`);
   if (unknownProfile.length) reasons.push(`${unknownProfile.length} risk profile answer${unknownProfile.length > 1 ? 's are' : ' is'} "Not known" and scored as the highest risk until confirmed`);
@@ -420,6 +479,7 @@ export function scoreAssessment(profile, fws, questions, answers, customCutoffs 
 
   return {
     principles, inherent, residual, legal, severe, inherentTier, tier, reasons, readiness, cutoffs: cut,
+    ...(provisional ? { provisional: true, declaredResidual } : {}),
     readinessStatus: readinessStatus(readiness), frameworks, pillars,
     dg: { score: frameworks.DG.score, ...maturityLevel(frameworks.DG.score) },
     criticalGaps: answered.filter((x) => x.q.weight === 3 && x.s <= 35).map((x) => x.q.id),

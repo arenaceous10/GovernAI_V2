@@ -7,6 +7,7 @@ import { useStore, waitingOn } from './store/store.jsx';
 import Landing from './pages/Landing.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import NewAssessment from './pages/NewAssessment.jsx';
+import ControlAssessment from './pages/ControlAssessment.jsx';
 import Products from './pages/Products.jsx';
 import Product from './pages/Product.jsx';
 import Catalog from './pages/Catalog.jsx';
@@ -49,7 +50,7 @@ const NAV = {
 };
 NAV.lead = NAV.assessor;
 // Pages reached by link, per role.
-const EXTRA = { client: ['product', 'draft', 'reassess', 'card', 'verify'], assessor: ['product', 'card', 'verify'], lead: ['product', 'card', 'verify'], admin: ['product', 'card', 'verify'] };
+const EXTRA = { client: ['product', 'draft', 'reassess', 'controls', 'card', 'verify'], assessor: ['product', 'controls', 'card', 'verify'], lead: ['product', 'controls', 'card', 'verify'], admin: ['product', 'controls', 'card', 'verify'] };
 
 export default function App() {
   const { role, setRole, state, systems, client, sync, me, signOut } = useStore();
@@ -72,6 +73,7 @@ export default function App() {
   else if (go === '/new') page = <NewAssessment key="new" nav={nav} />;
   else if (go === '/draft') page = sys?.status === 'Draft' ? <NewAssessment key={`d-${id}`} nav={nav} existing={sys} /> : <NotFound nav={nav} />;
   else if (go === '/reassess') page = sys && sys.assessment && sys.status !== 'Draft' ? <NewAssessment key={`r-${id}`} nav={nav} existing={sys} /> : <NotFound nav={nav} />;
+  else if (go === '/controls') page = sys ? <ControlAssessment key={`c-${id}`} id={id} nav={nav} /> : <NotFound nav={nav} />;
   else if (go === '/product') page = <Product key={id} id={id} nav={nav} back={back} />;
   else if (go === '/products') page = <Products nav={nav} />;
   else if (go === '/queue') page = <ReviewQueue nav={nav} />;
@@ -88,7 +90,7 @@ export default function App() {
   else if (go === '/verify') page = <VerifyPage onBack={() => window.history.back()} />;
   else page = <Dashboard nav={nav} />;
 
-  const current = go === '/product' || go === '/draft' || go === '/reassess' ? '/products' : go === '/card' ? '/cards' : go;
+  const current = go === '/product' || go === '/draft' || go === '/reassess' || go === '/controls' ? '/products' : go === '/card' ? '/cards' : go;
   const switchValue = role === 'client' ? `client:${state.clientOrg}` : role;
   return (
     <div className="shell">

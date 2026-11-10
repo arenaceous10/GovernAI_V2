@@ -6,16 +6,18 @@ import {
 } from '../data/frameworks.js';
 import { COUNTRIES, REGIONS } from '../data/countries.js';
 import {
-  emptyProfile, fixedQuestions, adaptiveTarget, selectAdaptive, aiAdaptive, orderQuestions, sectionOf, sectionOrder,
-  scoreAssessment, buildActions, UNKNOWN,
+  emptyProfile, sectionOf, sectionOrder, scoreAssessment, buildActions, UNKNOWN, FLOW, isStaged, rescore, refreshQuestions,
 } from '../engine/engine.js';
-import { Field, Ladder, Multi, Panel, Single } from '../components/ui.jsx';
+import { Field, Ladder, Multi, Panel, Single, TierBadge } from '../components/ui.jsx';
 import Combobox from '../components/Combobox.jsx';
 import { fwName } from '../components/Results.jsx';
-import { cloud } from '../lib/cloud.js';
+import { buildControlQuestions } from '../lib/buildQuestions.js';
 import { useStore } from '../store/store.jsx';
 
-const STEPS = ['Product', 'Frameworks', 'Risk profile', 'Questionnaire', 'Review'];
+// Registration asks for the risk profile only; control questions are answered at stage 2 with evidence.
+// Products registered before that change keep the full re-assessment, control answers included.
+const SHORT_STEPS = ['Product', 'Frameworks', 'Risk profile', 'Review'];
+const FULL_STEPS = ['Product', 'Frameworks', 'Risk profile', 'Questionnaire', 'Review'];
 const GEO_OPTIONS = [...REGIONS.map((r) => ({ value: r.code, label: r.name, group: true })), ...COUNTRIES.map((c) => ({ value: c.code, label: c.name }))];
 
 function stepErrors(step, p, fws) {
@@ -74,8 +76,11 @@ export default function NewAssessment({ nav, existing }) {
   const { register, saveDraft, state } = useStore();
   const init = useMemo(() => initialState(existing), [existing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [draftId, setDraftId] = useState(existing?.id || null);
-  const [step, setStep] = useState(init.step || 0);
-  const [maxStep, setMaxStep] = useState(init.maxStep || 0);
+  const full = !!existing && existing.status !== 'Draft' && !isStaged(existing.assessment);
+  const STEPS = full ? FULL_STEPS : SHORT_STEPS;
+  const Q = full ? 3 : -1; const R = STEPS.length - 1;
+  const [step, setStep] = useState(Math.min(init.step || 0, R));
+  const [maxStep, setMaxStep] = useState(Math.min(init.maxStep || 0, R));
   const [p, setP] = useState(init.p);
   const [fws, setFws] = useState(init.fws);
   const [questions, setQuestions] = useState(init.questions);
@@ -104,22 +109,7 @@ export default function NewAssessment({ nav, existing }) {
     const key = JSON.stringify([prof, fws]);
     if (key === builtKey && questions.length) return;
     setBuilding(true);
-    const overrides = state.bankOverrides || {};
-    const custom = state.settings.customQuestions || [];
-    const fixed = fixedQuestions(prof, fws, overrides, custom);
-    const target = adaptiveTarget(fixed.length);
-    let adaptive = []; let src = 'Rule-based tailoring';
-    const orgAi = state.clients.find((c) => c.id === (existing?.clientId || state.clientOrg))?.aiQuestions !== false;
-    if (state.settings.aiQuestions && orgAi) {
-      // Names the AI must never see, on top of the product's own name, owner and business unit.
-      const known = [...state.clients.map((c) => c.name), ...(state.users || []).map((u) => u.name), state.me?.name].filter(Boolean);
-      // The endpoint only answers signed-in clients and administrators, so send the session token.
-      const token = cloud ? (await cloud.auth.getSession()).data.session?.access_token : null;
-      const ai = await aiAdaptive(prof, fws, target, fixed, { known, token });
-      if (ai.questions.length) { adaptive = ai.questions; src = `AI (${ai.model || 'Gemini'})`; }
-    }
-    if (adaptive.length < target) adaptive = [...adaptive, ...selectAdaptive(prof, fws, target - adaptive.length, overrides, new Set(adaptive.map((q) => q.id)), custom)];
-    const all = orderQuestions([...fixed, ...adaptive], fws);
+    const { questions: all, source: src } = await buildControlQuestions(state, prof, fws, existing?.clientId);
     setQuestions(all);
     setAnswers((a) => Object.fromEntries(all.filter((q) => a[q.id] != null).map((q) => [q.id, a[q.id]])));
     setSource(src); setBuiltKey(key); setSection(null); setBuilding(false);
@@ -131,8 +121,8 @@ export default function NewAssessment({ nav, existing }) {
     setShowErr(false);
     busy.current = true;
     try {
-      if (to >= 3 && step < 3) await build();
-      if (to === 4 && step === 3 && unanswered > 0) { setShowErr(true); return; }
+      if (full && to >= Q && step < Q) await build();
+      if (full && to === R && step === Q && unanswered > 0) { setShowErr(true); return; }
       setStep(to); setMaxStep((m) => Math.max(m, to));
       window.scrollTo({ top: 0 });
     } finally { busy.current = false; }
@@ -147,8 +137,19 @@ export default function NewAssessment({ nav, existing }) {
   }
 
   function submit() {
-    if (unanswered) { setShowErr(true); return; }
     const profile = profileFor();
+    if (!full) {
+      // New product, or a product whose controls live at stage 2: the risk profile alone sets a provisional tier.
+      const base = reassess ? existing.assessment : { flow: FLOW, questions: [], answers: {}, questionSource: '' };
+      const qs = base.questions?.length ? refreshQuestions(base.questions, profile, fws, state.bankOverrides || {}, state.settings.customQuestions || []) : [];
+      const ids = new Set(qs.map((q) => q.id));
+      const keep = (o) => Object.fromEntries(Object.entries(o || {}).filter(([k]) => ids.has(k)));
+      const next = { ...base, at: new Date().toISOString(), by: state.role, profile, frameworks: fws, questions: qs, answers: keep(base.answers), evidence: keep(base.evidence), review: keep(base.review) };
+      const id2 = register(reassess ? existing.id : draftId, meta(), { ...next, results: rescore(next, state.settings.cutoffs) }, []);
+      nav(`/product/${id2}`);
+      return;
+    }
+    if (unanswered) { setShowErr(true); return; }
     const results = scoreAssessment(profile, fws, questions, answers, state.settings.cutoffs);
     const actions = buildActions(questions, answers, results.tier, new Date(), profile);
     const assessment = { at: new Date().toISOString(), by: state.role, profile, frameworks: fws, questions, answers, results, questionSource: source };
@@ -156,6 +157,7 @@ export default function NewAssessment({ nav, existing }) {
     nav(`/product/${id}`);
   }
 
+  const preview = !full && step === R && !(reassess && existing.assessment.questions?.length) ? scoreAssessment(profileFor(), fws, [], {}, state.settings.cutoffs, { provisional: true }) : null;
   const sections = sectionOrder(fws).map((k) => ({ k, qs: questions.filter((q) => sectionOf(q, fws) === k) })).filter((s) => s.qs.length);
   const current = sections.some((s) => s.k === section) ? section : sections[0]?.k;
   const activeSection = sections.find((s) => s.k === current);
@@ -185,7 +187,7 @@ export default function NewAssessment({ nav, existing }) {
       <div className="page-head">
         <div>
           <h1>{reassess ? `Re-assess ${existing.name}` : existing ? `Continue ${existing.name}` : 'Register an AI product'}</h1>
-          <p>{reassess ? 'Update the answers. The lifecycle stage stays where it is.' : 'Takes about 10 minutes. You can save a draft at any point.'}</p>
+          <p>{reassess ? (full ? 'Update the answers. The lifecycle stage stays where it is.' : 'Update the product details and risk profile. Control answers are kept and edited from the lifecycle.') : 'Takes about 3 minutes. Control questions come later, at stage 2, where you attach evidence.'}</p>
         </div>
       </div>
 
@@ -197,7 +199,7 @@ export default function NewAssessment({ nav, existing }) {
         ))}
       </nav>
 
-      {showErr && (errors.length > 0 || step >= 3) && (
+      {showErr && (errors.length > 0 || (full && step >= Q)) && (
         <div className="callout bad" style={{ marginBottom: 16 }} role="alert">
           {errors.length ? <>Still needed: {errors.join(', ')}.</> : `${unanswered} question${unanswered === 1 ? '' : 's'} still unanswered.`}
         </div>
@@ -323,7 +325,7 @@ export default function NewAssessment({ nav, existing }) {
         </div>
       )}
 
-      {step === 3 && (
+      {step === Q && (
         building ? <Panel><div className="empty"><Loader2 className="spin" size={22} /><p>Preparing questions for this product…</p></div></Panel> : (
           <div>
             <div className="tabs" role="tablist">
@@ -363,7 +365,7 @@ export default function NewAssessment({ nav, existing }) {
         )
       )}
 
-      {step === 4 && (
+      {step === R && (
         <Panel>
           <dl className="kv">
             <dt>Product</dt><dd>{p.name}</dd>
@@ -371,15 +373,18 @@ export default function NewAssessment({ nav, existing }) {
             <dt>Type of AI</dt><dd>{systemTypeLabel(p.systemType, p.systemTypeOther)}</dd>
             <dt>Sourcing</dt><dd>{selectionLabel(SOURCING, p.sourcing, p.sourcingOther)}</dd>
             <dt>Frameworks</dt><dd>{fws.map(fwName).join(', ')}</dd>
-            <dt>Questions</dt><dd>{answered} of {questions.length} answered ({questions.filter((q) => q.kind === 'core').length} standard, {questions.filter((q) => q.kind !== 'core').length} tailored)</dd>
-            <dt>Not known</dt><dd>{questions.filter((q) => answers[q.id] === UNKNOWN).length} control{questions.filter((q) => answers[q.id] === UNKNOWN).length === 1 ? '' : 's'}, {Object.values(p.answers).filter((v) => v === UNKNOWN).length} risk profile answer{Object.values(p.answers).filter((v) => v === UNKNOWN).length === 1 ? '' : 's'}. Each one is scored as the worst case and becomes a "find out" action.</dd>
+            {!full && <>{preview && <><dt>Risk tier</dt><dd><span className="row" style={{ gap: 8 }}><TierBadge tier={preview.tier} />{preview.provisional && <span className="tag">Provisional</span>} <span className="small mute">score {preview.inherent}/100 from the risk profile</span></span></dd></>}
+            <dt>Controls</dt><dd>{reassess && existing.assessment.questions?.length ? 'Your control answers are kept. Questions for a newly added framework appear in the control assessment.' : 'Answered at stage 2 of the lifecycle, with evidence. The tier is provisional until the governance team approves that stage, and it can only come down.'}</dd>
+            <dt>Not known</dt><dd>{Object.values(p.answers).filter((v) => v === UNKNOWN).length} risk profile answer{Object.values(p.answers).filter((v) => v === UNKNOWN).length === 1 ? '' : 's'}. Each one is scored as the worst case and becomes a "find out" action.</dd></>}
+            {full && <><dt>Questions</dt><dd>{answered} of {questions.length} answered ({questions.filter((q) => q.kind === 'core').length} standard, {questions.filter((q) => q.kind !== 'core').length} tailored)</dd>
+            <dt>Not known</dt><dd>{questions.filter((q) => answers[q.id] === UNKNOWN).length} control{questions.filter((q) => answers[q.id] === UNKNOWN).length === 1 ? '' : 's'}, {Object.values(p.answers).filter((v) => v === UNKNOWN).length} risk profile answer{Object.values(p.answers).filter((v) => v === UNKNOWN).length === 1 ? '' : 's'}. Each one is scored as the worst case and becomes a "find out" action.</dd></>}
           </dl>
-          {unanswered > 0 && (
+          {full && unanswered > 0 && (
             <div className="callout bad" style={{ marginTop: 14 }}>
-              {unanswered} unanswered. <button type="button" className="btn ghost sm" onClick={() => { setStep(3); setSection(sectionOf(firstUnanswered, fws)); }}>Go to the first one</button>
+              {unanswered} unanswered. <button type="button" className="btn ghost sm" onClick={() => { setStep(Q); setSection(sectionOf(firstUnanswered, fws)); }}>Go to the first one</button>
             </div>
           )}
-          <p className="small mute" style={{ marginTop: 14 }}>{reassess ? 'The score and tier update straight away.' : 'Registering scores the product and opens stage 1 of the lifecycle.'}</p>
+          <p className="small mute" style={{ marginTop: 14 }}>{reassess ? 'The score and tier update straight away.' : 'Registering classifies the product and opens stage 1 of the lifecycle.'}</p>
         </Panel>
       )}
 
@@ -387,9 +392,9 @@ export default function NewAssessment({ nav, existing }) {
         <button type="button" className="btn" disabled={step === 0} onClick={() => go(step - 1)}>Back</button>
         <div className="row">
           {!reassess && <button type="button" className="btn" disabled={building} onClick={onSaveDraft}>Save draft</button>}
-          {step < 4
+          {step < R
             ? <button type="button" className="btn primary" disabled={building} onClick={() => go(step + 1)}>Continue</button>
-            : <button type="button" className="btn primary" disabled={unanswered > 0} onClick={submit}>{reassess ? 'Save re-assessment' : 'Register product'}</button>}
+            : <button type="button" className="btn primary" disabled={full && unanswered > 0} onClick={submit}>{reassess ? 'Save re-assessment' : 'Register product'}</button>}
         </div>
       </div>
     </div>

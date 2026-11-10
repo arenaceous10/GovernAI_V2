@@ -15,4 +15,9 @@ async function answerRiskProfile(p, { idx = 1, annex = 'none', unknown = false }
     else await annexGroup.locator('[role=radio]', { hasText: new RegExp(`^\\s*${annex}`) }).click();
   }
 }
-module.exports = { answerRiskProfile };
+// From the review step: register, then open the control assessment (answered at stage 2, can be started at once).
+async function registerAndOpenControls(p, wait = 1500) {
+  await p.getByRole('button', { name: 'Register product', exact: true }).click(); await p.waitForTimeout(700);
+  await p.getByRole('button', { name: 'Start', exact: true }).click(); await p.waitForTimeout(wait);
+}
+module.exports = { answerRiskProfile, registerAndOpenControls };

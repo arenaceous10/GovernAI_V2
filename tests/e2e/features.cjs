@@ -2,7 +2,7 @@
 // Cloud build on port 4174 against the Supabase stand-in.
 const { chromium } = require('playwright');
 const { install, seededDb, signIn, signOut, EMAIL } = require('./fake-supabase.cjs');
-const { answerRiskProfile } = require('./wizard.cjs');
+const { answerRiskProfile, registerAndOpenControls } = require('./wizard.cjs');
 const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
 (async () => {
   const URL = process.env.URL || 'http://localhost:4174/';
@@ -86,7 +86,10 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
     await p.getByRole('button', { name: /Use suggested/ }).click(); await p.getByRole('button', { name: 'Continue' }).click(); await W();
     await answerRiskProfile(p, { idx: 0 });
     await p.locator('.risk-pillar .risk-options').first().locator('[role=radio]', { hasText: 'Not known' }).click();
-    await p.getByRole('button', { name: 'Continue' }).click(); await W(1500);
+    await p.getByRole('button', { name: 'Continue' }).click(); await W(300);
+    assert(!aiBody, 'registration alone sends nothing to the AI');
+    assert(/Not known\s*1 risk profile answer/.test(await body()), 'review shows not known count');
+    await registerAndOpenControls(p);
     assert(aiBody, 'AI endpoint called');
     assert(/^Bearer [A-Za-z0-9._-]{20,}$/.test(aiAuth || ''), 'AI call carries the sign-in token');
     for (const leak of ['Zebra', 'Quokka', 'Ottoline', 'Brandsma', 'Northwind', 'ottoline@', '7946', '99887766554', 'Priya']) assert(!aiBody.includes(leak), `AI payload leaked ${leak}`);
@@ -97,9 +100,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
       const nx = p.getByRole('button', { name: 'Next section' }); if (await nx.count()) await nx.click(); else break;
     }
     await p.locator('.choice.unknown').first().click();
-    await p.getByRole('button', { name: 'Continue' }).click(); await W();
-    assert(/Not known\s*1 control/.test(await body()), 'review shows not known count');
-    await p.getByRole('button', { name: 'Register product' }).click(); await W(900);
+    await p.getByRole('button', { name: 'Save progress' }).click(); await W(900);
     const mine = db.tables.v2_products.find((r) => r.name === 'Zebra pricing engine').data;
     assert(mine.assessment.results.unknownControls.length === 1 && mine.assessment.results.unknownProfile.length === 1, 'unknowns scored');
     assert(mine.actions.filter((a) => a.source === 'unknown').length === 2, 'find-out actions created');

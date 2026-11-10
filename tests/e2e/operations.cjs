@@ -4,7 +4,7 @@
 const { chromium } = require('playwright');
 const fs = require('node:fs');
 const { install, seededDb, signIn, signOut, EMAIL } = require('./fake-supabase.cjs');
-const { answerRiskProfile } = require('./wizard.cjs');
+const { answerRiskProfile, registerAndOpenControls } = require('./wizard.cjs');
 const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
 (async () => {
   const URL = process.env.URL || 'http://localhost:4174/';
@@ -62,7 +62,8 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
     await p.getByRole('button', { name: /Use suggested/ }).click(); await p.getByRole('button', { name: 'Continue' }).click(); await W();
     await answerRiskProfile(p, { idx: 0 });
     const before = aiCalls;
-    await p.getByRole('button', { name: 'Continue' }).click(); await W(1500);
+    await p.getByRole('button', { name: 'Continue' }).click(); await W(300);
+    await registerAndOpenControls(p);
     assert((await body()).includes('rules engine') || (await p.locator('[role=radio]').count()) > 0, 'questionnaire built without AI');
     assert(aiCalls === before, 'no description sent to the AI service for this organisation');
     assert(!errs.length, 'page errors: ' + errs.join(' | '));

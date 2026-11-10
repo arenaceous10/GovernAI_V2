@@ -12,6 +12,6 @@ export async function mount() {
   await act(async () => { root.render(<StoreProvider><Probe /></StoreProvider>); });
   return { root, api: () => globalThis.__api };
 }
-export { emptyProfile, buildQuestionnaire, scoreAssessment, buildActions, UNKNOWN } from '../../src/engine/engine.js';
+export { emptyProfile, buildQuestionnaire, scoreAssessment, buildActions, UNKNOWN, FLOW, rescore, controlGaps, evidenceNeed, evidenceMet, effectiveAnswers, isProvisional, isStaged, refreshQuestions } from '../../src/engine/engine.js';
 export { PROFILE_QUESTIONS, PROHIBITED, SELECTABLE_FRAMEWORKS } from '../../src/data/frameworks.js';
 export { act, stageBlockers, waitingOn, canWithdraw, purgeEligible, visibleSystems, STAGES, requiredApprovals, isMandatory, SKIP_REASONS, WITHDRAW_REASONS };

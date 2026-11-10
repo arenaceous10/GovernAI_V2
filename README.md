@@ -114,12 +114,19 @@ Permissions are enforced in the database, not only in the app.
 
 ## How a product moves through GovernAI
 
-1. **Register** (5 steps): product details, frameworks in scope, risk profile, questionnaire, review. Every question
-   offers "Not known"; each such answer becomes an action to find out.
-2. **Score**: based on the six Responsible AI principles (Social well-being and planet inclusive 14, Privacy and safety 20,
+1. **Register** (4 steps, about 3 minutes): product details, frameworks in scope, risk profile (12 questions and the
+   regulatory screening), review. Every question offers "Not known"; each such answer becomes an action to find out.
+   The tier shown is **provisional**: it rests on the risk profile alone, and controls can only bring it down.
+2. **Control assessment** (stage 2): the control questions are answered once, with evidence, on their own page.
+   "Evidenced" needs a file or a link. "In place" needs a reference (where it is documented or who owns it), and a file
+   or link when the control is critical and the risk profile alone puts the product at High. Stage 2 cannot be
+   submitted until every question is answered and backed. The governance team can lower a rating with a reason (never
+   raise it); both ratings are kept and the score uses the lower. Approving stage 2 confirms the controls and makes the
+   tier final. Products registered before this change keep their self-declared answers and the full re-assessment.
+3. **Score**: based on the six Responsible AI principles (Social well-being and planet inclusive 14, Privacy and safety 20,
    Fairness and equity 20, Robustness and stability 16, Accountability 16, Transparency 14). About 75% standard questions per
    framework and 25% tailored to the product; four options per question scored 0 / 35 / 70 / 100.
-3. **Tier**: the EU AI Act's four tiers. Cut-offs depend on the frameworks in scope and the strictest wins:
+4. **Tier**: the EU AI Act's four tiers. Cut-offs depend on the frameworks in scope and the strictest wins:
 
    | Framework | Limited from | High from |
    |---|---|---|
@@ -130,7 +137,7 @@ Permissions are enforced in the database, not only in the app.
 
    Prohibited practices are always Unacceptable. With the EU AI Act in scope, Annex III uses are at least High and
    Art. 50 uses at least Limited. Cut-offs are editable in Settings.
-4. **Lifecycle**: ten stages, each with a checklist, required evidence and an exit gate. Checks are **mandatory** or
+5. **Lifecycle**: ten stages, each with a checklist, required evidence and an exit gate. Checks are **mandatory** or
    **optional**; an optional check can be skipped with the "Skip with reason" button on its row (category, written
    reason, target date for planned work). Submit for review unlocks when mandatory checks are ticked and every optional
    one is ticked or skipped. The governance team approves or returns; approval moves the product on. After go-live it

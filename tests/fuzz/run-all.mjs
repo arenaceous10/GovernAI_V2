@@ -19,5 +19,6 @@ for (const [file, env] of runs) {
   for (const f of r.findings) console.log(`  - ${f.finding} (${f.count}x) ${String(f.example).slice(0, 200)}`);
 }
 execFileSync(process.execPath, [new URL('store.regress.mjs', import.meta.url).pathname], { stdio: 'inherit' });
+execFileSync(process.execPath, [new URL('controls.regress.mjs', import.meta.url).pathname], { stdio: 'inherit' });
 console.log(`total ${total} cases, ${bad} findings`);
 process.exit(bad ? 1 : 0);

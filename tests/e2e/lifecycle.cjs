@@ -71,15 +71,10 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   await p.getByRole('button', { name: /Use suggested/ }).click(); await S('07-wizard-frameworks'); await btn('Continue').click(); await W();
   await answerRiskProfile(p, { idx: 2, annex: 'Essential' });
   await S('08-wizard-risk'); await btn('Continue').click(); await W(1000);
-  t = await body(); const m = t.match(/(\d+) of (\d+) answered/); assert(m, 'questionnaire count');
-  for (let k = 0; k < 8; k++) {
-    for (const lad of await p.locator('.ladder').all()) await lad.locator('[role=radio]').nth(k % 2 ? 1 : 2).click();
-    const nx = btn('Next section'); if (await nx.count()) await nx.click(); else break;
-  }
-  await S('09-wizard-questions');
-  await btn('Continue').click(); await W(); await S('10-wizard-review');
-  const tailored = (await body()).match(/(\d+) standard, (\d+) tailored/); const share = +tailored[2] / (+tailored[1] + +tailored[2]);
-  assert(share >= 0.2 && share <= 0.3, 'share ' + share);
+  // registration ends at the risk profile: no control questions, and the tier is provisional
+  await S('10-wizard-review'); t = await body();
+  assert(!(await p.locator('.ladder').count()) && /Provisional/.test(t) && /Answered at stage 2/.test(t), 'review shows a provisional tier and no control questions');
+  assert((await p.locator('nav.steps button').count()) === 4, 'four registration steps');
   await btn('Register product').click(); await W(300);
   await S('11-registered'); t = await body(); assert(t.includes('Health claims fraud assistant') && /\bHigh\b/.test(t), 'registered as High');
   const pid = (await p.evaluate(() => location.hash)).replace('#product--', '');
@@ -106,9 +101,44 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   // reviewer queue
   await role('assessor'); await p.goto(URL + '#queue'); await W(); assert((await body()).includes('Health claims fraud assistant'), 'in queue'); await S('13-queue'); await noFractal('queue');
   await approve('assessor'); assert(await stageNo() === 2, 'moved to stage 2');
-  // stage 2 (gate, High): reviewer + lead
-  await clientSubmit(); await approve('assessor'); assert(await stageNo() === 2, 'still stage 2 waiting for lead');
+  // stage 2 (gate, High): the control assessment comes first
+  await role('client:northwind'); await openLife(); t = await body();
+  assert(/Control assessment not started/.test(t) && (await p.locator('.product-hero').innerText()).includes('Provisional'), 'stage 2 asks for the control assessment; tier provisional');
+  const ta2 = btn('Tick all'); if (await ta2.count()) await ta2.click();
+  assert(await p.getByRole('button', { name: 'Submit for review' }).isDisabled(), 'stage 2 cannot be submitted without the control assessment');
+  await btn('Start').click(); await W(1500);
+  t = await body(); assert(/Control assessment/.test(t) && (await p.locator('.ladder').count()) > 0, 'control questions shown');
+  const tabsN = await p.locator('[role=tablist] [role=tab]').count(); let asked = 0; let tailoredN = 0;
+  for (let k = 0; k < tabsN; k++) {
+    await p.locator('[role=tablist] [role=tab]').nth(k).click(); await W();
+    tailoredN += await p.locator('.q .tag.accent').count();
+    const lads = await p.locator('.ladder').all(); asked += lads.length;
+    for (let q = 0; q < lads.length; q++) await lads[q].locator('[role=radio]').nth(q % 2 ? 1 : 2).click();
+    // "In place" needs a reference, and a link when the control is critical on a High profile
+    for (;;) {
+      const att = p.locator('.q').getByRole('button', { name: 'Attach' }); if (!(await att.count())) break;
+      await att.first().click(); await p.getByLabel(/Link or document name for/).fill('https://sharepoint.example/controls/evidence'); await btn('Save').click(); await W(60);
+    }
+  }
+  const share = tailoredN / asked; assert(share >= 0.2 && share <= 0.3, 'tailored share ' + share);
+  await S('09-control-assessment'); await noFractal('control assessment');
+  t = await body(); assert(/Every control is answered and backed/.test(t), 'control assessment complete: ' + t.slice(-300));
+  await btn('Save and finish').click(); await W(300);
+  t = await body(); assert(/Control assessment complete/.test(t) && /Provisional/.test(t), 'complete, still provisional');
+  await tab('Risk and score'); t = await body(); assert(/declared so far/.test(t) && /Controls declared, not yet confirmed/.test(t), 'declared controls do not count yet');
+  await clientSubmit();
+  // locked for the client while the governance team has it
+  await p.goto(URL + '#controls--' + pid); await W(300); assert(!(await p.locator('.ladder').count()) && /answers are locked/.test(await body()), 'locked while submitted');
+  // the reviewer lowers one rating, with a reason
+  await role('assessor'); await p.goto(URL + '#controls--' + pid); await W(300);
+  await btn('Lower rating').first().click(); await btn('Save rating').click(); assert(/reason of at least/.test(await body()), 'a reason is required');
+  await p.getByLabel('Reason for the lower rating').fill('The link opens a draft policy that has not been approved.'); await btn('Save rating').click(); await W();
+  t = await body(); assert(/Governance rating:/.test(t) && /1 rating lowered/.test(t), 'reviewer rating recorded'); await S('09b-reviewer-rating');
+  await approve('assessor'); assert(await stageNo() === 2, 'still stage 2 waiting for lead');
   await approve('lead'); assert(await stageNo() === 3, 'lead approval moves to stage 3');
+  assert(!(await p.locator('.product-hero').innerText()).includes('Provisional'), 'tier is final after stage 2');
+  await tab('Assessment'); t = await body(); assert(/Confirmed by the governance team/.test(t) && /Governance rating:/.test(t), 'assessment tab shows confirmation and the reviewer rating');
+  await role('client:northwind'); await p.goto(URL + '#controls--' + pid); await W(300); assert(/Governance rating:/.test(await body()) && /draft policy/.test(await body()), 'client sees the lowered rating and why');
   // stage 3: return then resubmit
   await clientSubmit(); await role('assessor'); await openLife();
   await p.getByLabel('Comment to the client').fill('Attach the data card and licence register.');

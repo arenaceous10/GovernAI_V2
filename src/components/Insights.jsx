@@ -180,7 +180,7 @@ export default function ClientInsights({ systems, nav }) {
                   <td className="small">{s.stage}. {STAGES[s.stage - 1].short}</td>
                   <td><StatusPill status={stageLabel(s)} /></td>
                   <td className="num">{s.assessment.results.residual}</td>
-                  <td className="num">{s.assessment.results.readiness}%</td>
+                  <td className="num">{s.assessment.results.questionCount ? `${s.assessment.results.readiness}%` : <span className="xs mute">Not assessed</span>}</td>
                   <td className="num">{s.actions.filter((a) => a.status !== 'Done').length}</td>
                   <td><ArrowRight size={14} className="mute" /></td>
                 </tr>

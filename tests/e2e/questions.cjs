@@ -1,5 +1,5 @@
 // Administrator adds questions; a client sees them in a new assessment. Cloud build on port 4174.
-const { answerRiskProfile } = require('./wizard.cjs');
+const { answerRiskProfile, registerAndOpenControls } = require('./wizard.cjs');
 const { chromium } = require('playwright');
 const { install, seededDb, signIn, signOut } = require('./fake-supabase.cjs');
 const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
@@ -72,7 +72,8 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   await btn('Continue').click(); await W();
   await p.getByRole('button', { name: /Use suggested/ }).click(); await btn('Continue').click(); await W();
   await answerRiskProfile(p, { idx: 1, annex: 'none' });
-  await btn('Continue').click(); await W(1200);
+  await btn('Continue').click(); await W(300);
+  await registerAndOpenControls(p, 1200);
   let found = false; let off = false;
   for (let k = 0; k < 10; k++) {
     const t = await body();
