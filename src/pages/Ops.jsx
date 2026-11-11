@@ -8,6 +8,7 @@ import { DEFAULT_SLA, reviewTimers, reviewerStats, portfolio, timeToValue, media
 import { Panel, Pill, TierBadge, fmtDate } from '../components/ui.jsx';
 import { toast } from '../components/Extras.jsx';
 import { syncProduct } from '../components/Registry.jsx';
+import { registryOpen } from '../lib/registryStage.js';
 import { cloud } from '../lib/cloud.js';
 import { useStore, waitingOn } from '../store/store.jsx';
 
@@ -34,7 +35,7 @@ export default function Ops({ nav }) {
   const ttv = timeToValue(state.clients, systems, state.users).filter((x) => x.start);
   const ttvMedian = median(ttv.map((x) => x.days));
   const over = timers.filter((t) => t.state === 'over').length;
-  const connected = systems.filter((s) => s.connector?.host);
+  const connected = systems.filter((s) => s.connector?.host && registryOpen(s));
   const [checking, setChecking] = useState(false);
 
   const checkAll = async () => {

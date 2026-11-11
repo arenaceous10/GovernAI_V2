@@ -57,3 +57,12 @@ test('card completeness counts metrics read from the connected registry', async 
   const withReg = { ...base, connector: { versions: [{ version: '3', aliases: ['champion'], metrics: { auc: 0.79 } }] } };
   assert.ok(cardCompleteness(withReg) > cardCompleteness(base));
 });
+
+test('model registry opens at stage 4 (Design and development)', async () => {
+  const { registryOpen, REGISTRY_FROM_STAGE } = await import('../src/lib/registryStage.js');
+  assert.equal(REGISTRY_FROM_STAGE, 4);
+  for (const st of [1, 2, 3]) assert.equal(registryOpen({ stage: st }), false);
+  for (const st of [4, 5, 8, 9]) assert.equal(registryOpen({ stage: st }), true);
+  assert.equal(registryOpen({ data: { stage: 3 } }), false);
+  assert.equal(registryOpen({ data: { stage: 4 } }), true);
+});

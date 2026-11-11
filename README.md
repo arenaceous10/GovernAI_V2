@@ -183,6 +183,8 @@ Permissions are enforced in the database, not only in the app.
 
 **Integrations (Databricks)**
 
+The model registry opens at stage 4, Design and development, when the model is being built. Before that the AI card says so, and the app, the store and `api/connector.js` all refuse to connect, test or read a registry (`src/lib/registryStage.js`).
+
 All four use the product's single model-registry connection (address and a sealed read-only token):
 - **Model registry** (AI card): MLflow or Databricks Unity Catalog. Versions, run metrics, description and owner
   appear on the card ("Fill from registry" fills empty card fields). A new version of a product in production opens a

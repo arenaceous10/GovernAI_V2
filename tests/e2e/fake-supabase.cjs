@@ -329,6 +329,7 @@ function installApi(context, db) {
     db.calls.push(`API connector ${body.action}`);
     if (!u.role) return send(route, 401, { error: 'Sign in first' });
     if (!row) return send(route, 404, { error: 'Unknown product' });
+    if (Number(row.data?.stage ?? 1) < 4) return send(route, 409, { error: 'The model registry opens at stage 4, Design and development, when the model is being built.' });
     if (['seal', 'test'].includes(body.action) && !['client', 'admin'].includes(u.role)) return send(route, 403, { error: 'Only the client or an administrator can connect a model' });
     if (body.action === 'seal') return send(route, 200, { sealed: `v1.sealed-for-${row.id}` });
     if (body.action === 'test' && !/^https:\/\//.test(body.host || '')) return send(route, 502, { error: 'Only https addresses are allowed' });

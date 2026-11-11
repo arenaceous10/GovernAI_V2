@@ -7,6 +7,7 @@
 // The product is read with the caller's own Supabase token (row-level security), so nobody can use another
 // organisation's connection. Clients and admins may connect a model; the governance team may also sync.
 import { signedIn, readBody } from '../src/lib/serverAuth.js';
+import { registryOpen, REGISTRY_CLOSED_TEXT } from '../src/lib/registryStage.js';
 import { seal, unseal, readRegistry, readGenAI, readMonitoring, readTables, validWarehouse, checkHost } from '../src/lib/server/connector.js';
 
 export default async function handler(req, res) {
@@ -23,6 +24,7 @@ export default async function handler(req, res) {
   if (!who.ok) return res.status(who.status).json({ error: who.error });
   const row = (await who.get(`v2_products?select=id,data&id=eq.${encodeURIComponent(id)}`))?.[0];
   if (!row) return res.status(404).json({ error: 'Unknown product' });
+  if (!registryOpen({ stage: row.data?.stage })) return res.status(409).json({ error: REGISTRY_CLOSED_TEXT });
   const canConnect = ['client', 'admin'].includes(who.profile.role);
   const opts = { allowLocal: process.env.CONNECTOR_ALLOW_LOCAL === '1' };
   try {

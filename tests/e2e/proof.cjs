@@ -98,6 +98,9 @@ const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwA
     let c;
     await signIn(p, EMAIL['client:meridian']);
     db.registry = { info: { description: 'Scores motor claims for triage.', owner: 'ml-platform@meridian.example' }, versions: [{ version: '3', createdAt: '2026-10-01T00:00:00Z', aliases: ['champion'], metrics: { auc: 0.912 } }, { version: '2', createdAt: '2026-08-01T00:00:00Z' }] };
+    await p.goto(URL + '#card--sys-4'); await W(p, 1000);
+    assert((await body(p)).includes('opens at stage 4'), 'registry closed before stage 4');
+    assert(await p.getByRole('button', { name: /Connect a model registry/ }).count() === 0, 'no connect button before stage 4');
     await p.goto(URL + '#card--sys-5'); await W(p, 1000);
     assert((await body(p)).includes('Model registry'), 'registry panel');
     await p.getByRole('button', { name: /Connect a model registry/ }).click(); await W(p);

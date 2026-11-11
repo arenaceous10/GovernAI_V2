@@ -7,11 +7,13 @@ import { callApi } from '../lib/api.js';
 import { Field, Panel, Pill, fmtDate } from './ui.jsx';
 import { toast } from './Extras.jsx';
 import { useStore } from '../store/store.jsx';
+import { registryOpen, REGISTRY_CLOSED_TEXT } from '../lib/registryStage.js';
 
 const KIND = { mlflow: 'MLflow model registry', 'databricks-uc': 'Databricks Unity Catalog' };
 const STALE_MS = 12 * 3600 * 1000;
 
 export async function syncProduct(store, s, { quiet = false } = {}) {
+  if (!registryOpen(s)) throw new Error(REGISTRY_CLOSED_TEXT);
   const res = await callApi('/api/connector', { action: 'sync', productId: s.id });
   const outcome = store.applyModelSync(s.id, res);
   if (!quiet || outcome !== 'same') {
@@ -28,7 +30,8 @@ export default function RegistryPanel({ s }) {
   const { role, connectModel, disconnectModel, setConnectorConfig } = store;
   const [cfg, setCfg] = useState(null);
   const c = s.connector;
-  const canConnect = ['client', 'admin'].includes(role) && !['Retired', 'Withdrawn'].includes(s.status);
+  const open = registryOpen(s);
+  const canConnect = open && ['client', 'admin'].includes(role) && !['Retired', 'Withdrawn'].includes(s.status);
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
@@ -36,7 +39,7 @@ export default function RegistryPanel({ s }) {
 
   // Check once when the card opens if the last check is older than 12 hours.
   useEffect(() => {
-    if (!cloud || !c?.host || auto.current) return;
+    if (!cloud || !open || !c?.host || auto.current) return;
     if (c.lastSync && Date.now() - new Date(c.lastSync).getTime() < STALE_MS) return;
     auto.current = true;
     syncProduct(store, s, { quiet: true }).catch(() => {});
@@ -66,9 +69,10 @@ export default function RegistryPanel({ s }) {
   return (
     <Panel title={<span className="row" style={{ gap: 6 }}><PlugZap size={15} /> Model registry</span>}
       sub="Versions and metrics come straight from where the model is registered. A new version in production opens a change review."
-      right={c && cloud ? <button className="btn ghost sm" onClick={sync} disabled={!!busy}>{busy === 'sync' ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} Check now</button> : null}>
+      right={c && cloud && open ? <button className="btn ghost sm" onClick={sync} disabled={!!busy}>{busy === 'sync' ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} Check now</button> : null}>
+      {cloud && !open && <p className="small mute">{REGISTRY_CLOSED_TEXT} Nothing is read from or written to a registry before then.</p>}
       {!cloud && <p className="small mute">Available when GovernAI is connected to its cloud database, because the token is kept sealed on the server.</p>}
-      {cloud && !c && !form && (
+      {cloud && open && !c && !form && (
         <div>
           <p className="small mute">Not connected. Connect MLflow or Databricks Unity Catalog with a read-only token to keep versions and metrics up to date without copying them by hand.</p>
           {canConnect && <button className="btn sm" style={{ marginTop: 8 }} onClick={() => setForm({ kind: 'databricks-uc', host: '', model: '', token: '', experiment: '', monitorTable: '', warehouseId: '' })}><Link2 size={14} /> Connect a model registry</button>}

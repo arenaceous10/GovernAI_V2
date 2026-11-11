@@ -12,6 +12,7 @@ import { TIERS, SELECTABLE_FRAMEWORKS } from '../data/frameworks.js';
 import { rescore, buildActions, controlGaps, effectiveAnswers, isStaged, isProvisional } from '../engine/engine.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
 import { buildControlQuestions } from '../lib/buildQuestions.js';
+import { registryOpen } from '../lib/registryStage.js';
 import { controlFor, controlById, isMandatory, itemState, validReason, SKIP_REASONS } from '../data/controls.js';
 
 const KEY = 'governai.v4';
@@ -619,12 +620,12 @@ export function StoreProvider({ children, standalone = null }) {
       }, 'AI card updated', (s2) => `Version ${((s2.systems.find((y) => y.id === id)?.card?.version) || 0) + 1}`),
       // ----- model registry connection (MLflow or Databricks Unity Catalog) -----
       // The token is sealed by the server before it is stored here; the browser never keeps it in the clear.
-      connectModel: (id, c) => ['client', 'admin'].includes(state.role) && updateSystem(id, (x) => ({
+      connectModel: (id, c) => ['client', 'admin'].includes(state.role) && updateSystem(id, (x) => (!registryOpen(x) ? x : {
         ...x, connector: { kind: c.kind, host: c.host, model: c.model, tokenSealed: c.tokenSealed || '', connectedAt: nowIso(), connectedBy: state.me?.name || state.role,
           experiment: c.experiment || '', monitorTable: c.monitorTable || '', warehouseId: c.warehouseId || '', genai: c.result?.genai || null, monitoring: c.result?.monitoring || null, info: c.result?.info || null, versions: c.result?.versions || [], latest: c.result?.latest || null, seenVersion: c.result?.latest || null, lastSync: c.result ? nowIso() : null, alerts: [] },
       }), 'Model registry connected', `${c.kind === 'databricks-uc' ? 'Databricks Unity Catalog' : 'MLflow'}: ${c.model}`),
       // Where evaluations, traces and monitoring come from: an MLflow experiment, a monitored table and a SQL warehouse.
-      setConnectorConfig: (id, cfg) => ['client', 'admin'].includes(state.role) && updateSystem(id, (x) => (x.connector ? {
+      setConnectorConfig: (id, cfg) => ['client', 'admin'].includes(state.role) && updateSystem(id, (x) => (x.connector && registryOpen(x) ? {
         ...x, connector: { ...x.connector, experiment: String(cfg.experiment || '').trim().slice(0, 300), monitorTable: String(cfg.monitorTable || '').trim().slice(0, 300), warehouseId: String(cfg.warehouseId || '').trim().slice(0, 40) },
       } : x), 'Model registry settings updated'),
       // Unity Catalog tables read by the server become (or refresh) datasets. Fields people set in GovernAI
@@ -648,7 +649,7 @@ export function StoreProvider({ children, standalone = null }) {
       // change review (stage 8) when the person syncing may raise changes; otherwise the alert waits for them.
       applyModelSync: (id, result) => {
         const x0 = state.systems.find((y) => y.id === id);
-        if (!x0?.connector || !result) return null;
+        if (!x0?.connector || !result || !registryOpen(x0)) return null;
         const fresh = result.latest && x0.connector.seenVersion && String(result.latest) !== String(x0.connector.seenVersion)
           && (+result.latest || 0) >= (+x0.connector.seenVersion || 0);
         // Drift in a new monitoring window is recorded once, as an alert and in the audit log (so also in the record).
