@@ -28,7 +28,15 @@ export async function uploadEvidence(file, { systemId, stage }) {
   if (!cloud) return { ...meta, data: await readAsDataUrl(file) };
   const path = `${systemId}/stage-${stage}/${rid()}-${safeName(file.name)}`;
   const { error } = await cloud.storage.from(BUCKET).upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false });
-  if (error) throw new Error(error.message || 'Upload failed.');
+  if (error) {
+    const code = Number(error.status || error.statusCode);
+    // A refusal that never reached our storage (it leaves no trace in its log) comes from the network or browser
+    // in between: a company proxy or security tool that blocks file uploads.
+    if (code === 403 || /\b403\b|forbidden/i.test(error.message || '')) {
+      throw new Error('The upload was refused (403). Your permissions are fine; a network or browser security tool is probably blocking file uploads. Try another network or browser, or attach a link to the document instead.');
+    }
+    throw new Error(error.message || 'Upload failed.');
+  }
   return { ...meta, path };
 }
 
