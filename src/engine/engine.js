@@ -377,7 +377,8 @@ export function controlGaps(a) {
   const tier = a?.results?.inherentTier;
   const unanswered = qs.filter((q) => ans[q.id] == null || ans[q.id] === '');
   const unsupported = qs.filter((q) => !evidenceMet(evidenceNeed(q, ans[q.id], tier), ev[q.id]));
-  return { started: qs.length > 0, total: qs.length, unanswered: unanswered.length, unsupported: unsupported.length,
+  const touched = Object.keys(ans).length > 0 || Object.keys(ev).length > 0;
+  return { started: qs.length > 0 && touched, prepared: qs.length > 0, total: qs.length, unanswered: unanswered.length, unsupported: unsupported.length,
     unansweredIds: unanswered.map((q) => q.id), unsupportedIds: unsupported.map((q) => q.id),
     complete: qs.length > 0 && !unanswered.length && !unsupported.length };
 }

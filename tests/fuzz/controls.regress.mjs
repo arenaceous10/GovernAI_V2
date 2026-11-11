@@ -44,6 +44,18 @@ await check('registration with the risk profile alone gives a provisional tier t
   assert.equal(sys(id).status, 'Active');
   assert.ok(!sys(id).actions.some((x) => x.source === 'assessment'), 'no control gap actions before controls are answered');
 });
+await check('questions are written in the background after registration, without touching the score', async () => {
+  const before = sys(id).assessment.results;
+  await run(() => api().prepareControls(id));
+  const a = sys(id).assessment;
+  assert.ok(a.questions.length >= 16, 'questions prepared');
+  assert.deepEqual(a.answers, {});
+  assert.equal(a.results, before);
+  assert.equal(H.controlGaps(a).prepared, true);
+  assert.equal(H.controlGaps(a).started, false, 'prepared is not started');
+  await run(() => api().prepareControls(id));
+  assert.equal(sys(id).assessment.questions.length, a.questions.length, 'a second call changes nothing');
+});
 await check('stage 1 passes without controls; stage 2 cannot be submitted until they are answered and backed', async () => {
   await passStage(id, 1);
   assert.equal(sys(id).stage, 2);

@@ -73,7 +73,7 @@ function PillarHeading({ index, title, detail, count }) {
 }
 
 export default function NewAssessment({ nav, existing }) {
-  const { register, saveDraft, state } = useStore();
+  const { register, saveDraft, state, prepareControls } = useStore();
   const init = useMemo(() => initialState(existing), [existing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [draftId, setDraftId] = useState(existing?.id || null);
   const full = !!existing && existing.status !== 'Draft' && !isStaged(existing.assessment);
@@ -146,6 +146,7 @@ export default function NewAssessment({ nav, existing }) {
       const keep = (o) => Object.fromEntries(Object.entries(o || {}).filter(([k]) => ids.has(k)));
       const next = { ...base, at: new Date().toISOString(), by: state.role, profile, frameworks: fws, questions: qs, answers: keep(base.answers), evidence: keep(base.evidence), review: keep(base.review) };
       const id2 = register(reassess ? existing.id : draftId, meta(), { ...next, results: rescore(next, state.settings.cutoffs) }, []);
+      if (id2 && !qs.length) prepareControls(id2);
       nav(`/product/${id2}`);
       return;
     }

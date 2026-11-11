@@ -418,7 +418,7 @@ function Assessment({ s, nav }) {
           <dt>Frameworks</dt><dd>{fws.map(fwName).join(', ')}</dd>
           <dt>Assessed</dt><dd>{fmtDate(a.at)}</dd>
           <dt>Controls</dt><dd>{isStaged(a)
-            ? <>{a.questions.length ? (a.controlsConfirmedAt ? `Confirmed by the governance team on ${fmtDate(a.controlsConfirmedAt)}` : 'Not yet confirmed by the governance team') : 'Not started'} <button type="button" className="btn sm" style={{ marginLeft: 8 }} onClick={() => nav(`/controls/${s.id}`)}>Control assessment</button></>
+            ? <>{controlGaps(a).started ? (a.controlsConfirmedAt ? `Confirmed by the governance team on ${fmtDate(a.controlsConfirmedAt)}` : 'Not yet confirmed by the governance team') : 'Not started'} <button type="button" className="btn sm" style={{ marginLeft: 8 }} onClick={() => nav(`/controls/${s.id}`)}>Control assessment</button></>
             : 'Self-declared at registration, before control answers needed evidence'}</dd>
         </dl>
       </Panel>

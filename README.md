@@ -117,6 +117,8 @@ Permissions are enforced in the database, not only in the app.
 1. **Register** (4 steps, about 3 minutes): product details, frameworks in scope, risk profile (12 questions and the
    regulatory screening), review. Every question offers "Not known"; each such answer becomes an action to find out.
    The tier shown is **provisional**: it rests on the risk profile alone, and controls can only bring it down.
+   The control questions (including the AI-tailored ones) are written in the background as soon as the product is
+   registered, so stage 2 opens without a wait. Serverless functions run in Singapore, next to the database (`vercel.json`).
 2. **Control assessment** (stage 2): the control questions are answered once, with evidence, on their own page.
    "Evidenced" needs a file or a link. "In place" needs a reference (where it is documented or who owns it), and a file
    or link when the control is critical and the risk profile alone puts the product at High. Stage 2 cannot be

@@ -8,7 +8,6 @@ import { sectionOf, sectionOrder, isStaged, isProvisional, controlGaps, evidence
 import { Ladder, Panel, Pill, TierBadge, fmtDate } from '../components/ui.jsx';
 import { fwName } from '../components/Results.jsx';
 import { toast } from '../components/Extras.jsx';
-import { buildControlQuestions } from '../lib/buildQuestions.js';
 import { useStore, CAN } from '../store/store.jsx';
 import { EvidenceItem } from './Product.jsx';
 
@@ -57,7 +56,7 @@ function ReviewerRating({ q, answer, rating, canRate, onRate }) {
 }
 
 export default function ControlAssessment({ id, nav }) {
-  const { getSystem, state, role, saveControls, rateControl } = useStore();
+  const { getSystem, role, saveControls, rateControl, prepareControls } = useStore();
   const s = getSystem(id);
   const a = s?.assessment;
   const staged = !!s && s.status !== 'Draft' && isStaged(a);
@@ -76,17 +75,16 @@ export default function ControlAssessment({ id, nav }) {
   const latest = useRef(null);
   latest.current = { questions, answers, evidence, source, dirty, canEdit };
 
-  // First visit: build the question set from the risk profile and the frameworks in scope.
+  // Questions are written in the background when the product is registered. Opened before they are ready, this
+  // waits for that same call (or starts it for products registered earlier).
   useEffect(() => {
-    if (!canEdit || questions.length || building) return;
-    let live = true;
+    if (!canEdit || a?.questions?.length) return;
     setBuilding(true);
-    buildControlQuestions(state, a.profile, a.frameworks, s.clientId).then((b) => {
-      if (!live) return;
-      setQuestions(b.questions); setSource(b.source); setBuilding(false);
-    }).catch(() => live && setBuilding(false));
-    return () => { live = false; };
-  }, [canEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+    Promise.resolve(prepareControls(id)).finally(() => setBuilding(false));
+  }, [canEdit, id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!questions.length && a?.questions?.length) { setQuestions(a.questions); setSource(a.questionSource || ''); }
+  }, [a?.questions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The governance team sees the saved answers, and picks up changes the client makes meanwhile.
   useEffect(() => {

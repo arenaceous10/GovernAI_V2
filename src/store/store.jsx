@@ -11,6 +11,7 @@ import { requiredApprovals, nextStage, stageOf, ROLES } from '../data/lifecycle.
 import { TIERS, SELECTABLE_FRAMEWORKS } from '../data/frameworks.js';
 import { rescore, buildActions, controlGaps, effectiveAnswers, isStaged, isProvisional } from '../engine/engine.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
+import { buildControlQuestions } from '../lib/buildQuestions.js';
 import { controlFor, controlById, isMandatory, itemState, validReason, SKIP_REASONS } from '../data/controls.js';
 
 const KEY = 'governai.v4';
@@ -181,6 +182,7 @@ export function StoreProvider({ children, standalone = null }) {
   const lastFetch = useRef(0);
   const userRef = useRef(null);           // signed-in user id, so repeated auth events do not reload
   const recheck = useRef(null);           // re-reads the signed-in user's access
+  const preparing = useRef(new Map());   // product id -> control questions being written in the background
   const revsRef = useRef(new Map());      // product id -> version last read or saved (refuses saves over newer work)
 
   // ----- cloud: load what this signed-in user may see (row-level security filters it) -----
@@ -449,6 +451,24 @@ export function StoreProvider({ children, standalone = null }) {
 
 
       // ----- control assessment (stage 2) -----
+      // Writes the control questions in the background as soon as the risk profile is registered, so stage 2 opens
+      // at once. Returns the pending promise, so a screen opened early waits for the same call instead of repeating it.
+      prepareControls: (id) => {
+        if (preparing.current.has(id)) return preparing.current.get(id);
+        const live = () => stateRef.current.systems.find((y) => y.id === id);
+        const p = (async () => {
+          // Called right after registering, the product may not have reached the store yet.
+          let x = live();
+          for (let k = 0; !x && k < 20; k++) { await new Promise((r) => setTimeout(r, 100)); x = live(); }
+          if (!x || !isStaged(x.assessment) || x.status === 'Draft' || ARCHIVED.includes(x.status) || x.assessment.questions?.length || !CAN.work(stateRef.current.role)) return;
+          const b = await buildControlQuestions(stateRef.current, x.assessment.profile, x.assessment.frameworks, x.clientId);
+          // Set only if nobody built them meanwhile. The score is untouched: nothing is answered yet.
+          updateSystem(id, (y) => (y.assessment?.questions?.length || !isStaged(y.assessment) ? y
+            : { ...y, assessment: { ...y.assessment, questions: b.questions, questionSource: b.source } }), null);
+        })().catch(() => {}).finally(() => preparing.current.delete(id));
+        preparing.current.set(id, p);
+        return p;
+      },
       // The client answers the control questions and attaches evidence. Saving part-way is allowed; the stage
       // cannot be submitted until every question is answered and backed as required.
       saveControls: (id, { questions, answers, evidence, source }) => CAN.work(state.role) && updateSystem(id, (x, s) => {
