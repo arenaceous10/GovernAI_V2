@@ -804,7 +804,16 @@ function ControlsBanner({ s, nav }) {
     return <div className={`callout ${s.stage >= 2 ? 'warn' : ''}`} style={{ marginBottom: 14 }}><b>Control assessment not started.</b> {s.stage >= 2 ? 'Stage 2 cannot be submitted without it.' : 'It is needed at stage 2. You can start it now.'}{open('Start')}</div>;
   }
   if (!g.complete) return <div className="callout warn" style={{ marginBottom: 14 }}><b>Control assessment: {left}.</b>{s.stage === 2 ? ' Stage 2 cannot be submitted until it is complete.' : ''}{open(client ? 'Continue' : 'Open')}</div>;
-  if (isProvisional(a)) return <div className="callout" style={{ marginBottom: 14 }}><b>Control assessment complete.</b> The tier stays provisional until the governance team approves stage 2.{open(client ? 'Open' : 'Review control answers')}</div>;
+  if (isProvisional(a)) {
+    const sub = s.stages?.[2]?.status === 'submitted';
+    const atTwo = s.stage === 2;
+    const next = client
+      ? (atTwo && !sub ? ' Next: open the Lifecycle tab and press Submit for review on stage 2. The governance team can only approve after you submit.' : sub ? ' Stage 2 is with the governance team.' : '')
+      : CAN.review(role)
+        ? (sub ? ' Stage 2 is waiting for your decision: on the Lifecycle tab, open stage 2 and use Approve or Return under Your decision.' : atTwo ? ' The client has not submitted stage 2 yet, so there is nothing to approve. Approve and Return appear once they submit.' : '')
+        : '';
+    return <div className="callout" style={{ marginBottom: 14 }}><b>Control assessment complete.</b> The tier stays provisional until the governance team approves stage 2.{next}{open(client ? 'Open' : 'Review control answers')}</div>;
+  }
   return null;
 }
 
