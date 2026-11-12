@@ -1,5 +1,6 @@
 // Model registry panel on the AI card: connect MLflow or Databricks Unity Catalog with a read-only token, see the
 // registered versions and their metrics, and turn a new version into a change review.
+import { pendingVersions, compareMetrics } from '../engine/governance.js';
 import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertTriangle, CheckCircle2, ChevronDown, FlaskConical, Link2, Loader2, PlugZap, RefreshCw, Settings2, Unplug } from 'lucide-react';
 import { cloud } from '../lib/cloud.js';
@@ -65,7 +66,10 @@ export default function RegistryPanel({ s }) {
     finally { setBusy(''); }
   };
 
-  const alerts = (c?.alerts || []).filter((a) => !a.raised && a.kind !== 'drift').slice(-3).reverse();
+  // A "new version" alert stays until an approved go-live or change covers that version; then it clears by itself.
+  const alerts = pendingVersions(s).filter((a) => !a.raised || s.stage !== 8).slice(-3).reverse();
+  const underReview = s.stage === 8 ? pendingVersions(s).filter((a) => a.raised).at(-1) : null;
+  const approved = (s.approvedVersions || []).at(-1);
   return (
     <Panel title={<span className="row" style={{ gap: 6 }}><PlugZap size={15} /> Model registry</span>}
       sub="Versions and metrics come straight from where the model is registered. A new version in production opens a change review."
@@ -89,7 +93,7 @@ export default function RegistryPanel({ s }) {
           <Field label="Registered model name" hint={form.kind === 'databricks-uc' ? 'catalog.schema.model, e.g. main.claims.triage' : 'Exactly as it appears in the registry'}>
             <input className="input" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} />
           </Field>
-          <Field label="Read-only access token" hint="Create a token that can only read this model. It is encrypted by the server and never shown again.">
+          <Field label="Read-only access token" hint="Create a token that can only read this model: in Databricks, a service principal or personal token limited to the catalog (USE CATALOG, USE SCHEMA, EXECUTE on the model, SELECT on the monitored tables) and, for drift values, CAN USE on one SQL warehouse. It is encrypted by the server and never shown again.">
             <input className="input" type="password" autoComplete="off" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} />
           </Field>
           <AdvancedFields v={form} set={(p) => setForm({ ...form, ...p })} kind={form.kind} />
@@ -107,7 +111,9 @@ export default function RegistryPanel({ s }) {
             <dt>Model</dt><dd className="mono">{c.model}</dd>
             <dt>Latest version</dt><dd><b>{c.latest || '—'}</b>{s.card?.modelVersion && c.latest && String(s.card.modelVersion) !== String(c.latest) ? <Pill tone="warn">Card says {s.card.modelVersion}</Pill> : null}</dd>
             <dt>Last checked</dt><dd>{c.lastSync ? new Date(c.lastSync).toLocaleString('en-GB') : 'Never'}</dd>
+            {approved && <><dt>Approved version</dt><dd><b>{approved.version}</b> <span className="mute">at stage {approved.stage} on {fmtDate(approved.at)}{c.latest != null && String(c.latest) !== String(approved.version) ? '. The registry has moved on since.' : ''}</span></dd></>}
           </dl>
+          {underReview && <div className="verdict"><AlertTriangle size={18} aria-hidden /><div className="small"><b>Version {underReview.version} is under change review (stage 8)</b> It clears here once the change is approved.</div></div>}
           {alerts.map((a) => (
             <div key={a.at} className="verdict warn"><AlertTriangle size={18} aria-hidden /><div className="small"><b>Version {a.version} found on {fmtDate(a.at)}</b> (was {a.from}).
               {s.stage === 7 && s.status === 'In production' ? ' Raise a change on the lifecycle tab to review it before it is used.' : ' It is recorded here and in the change history.'}</div></div>
@@ -212,6 +218,11 @@ export function GenAIPanel({ s }) {
   );
 }
 
+const perfLabel = (k, positive) => (k.endsWith('_positive') ? `${k.replace('_positive', '').replace(/_/g, ' ')}, positive class${positive != null ? ` (${positive})` : ''}`
+  : ['precision', 'recall', 'f1_score'].includes(k) ? `${k.replace(/_/g, ' ')}, weighted` : k.replace(/_/g, ' '));
+// Columns for the by-group table: positive-class figures first when there are any, at most four.
+const sliceCols = (slices) => { const all = [...new Set(slices.flatMap((x) => Object.keys(x.metrics)))]; const pos = all.filter((k) => k.endsWith('_positive')); return (pos.length ? [...pos, ...all.filter((k) => k === 'accuracy_score')] : all).slice(0, 4); };
+
 // Production monitoring from a Databricks data profiling monitor: status, drifted columns, live performance.
 export function MonitoringPanel({ s }) {
   const c = s.connector; const m = c?.monitoring;
@@ -232,9 +243,30 @@ export function MonitoringPanel({ s }) {
                 <div className="xs">{m.drift.drifted.map((d) => `${d.column}${d.js != null ? ` (JS ${Math.round(d.js * 1000) / 1000}` : ' ('}${d.psi != null ? `, PSI ${Math.round(d.psi * 1000) / 1000}` : ''}${d.ksP != null ? `, KS p ${Math.round(d.ksP * 1000) / 1000}` : ''})`).join('; ')}</div>
                 {s.stage === 7 && <div className="xs" style={{ marginTop: 4 }}>If this changes how the model behaves, raise an incident or a change on the lifecycle tab.</div>}</div></div>
             ))}
+            {m.drift?.skipped?.length > 0 && <p className="xs mute">Left out of the drift check because they are not model inputs (identifiers, the label, the model id): {m.drift.skipped.join(', ')}.</p>}
             {m.performance?.metrics && Object.keys(m.performance.metrics).length > 0 && (
               <div><p className="xs mute" style={{ margin: '0 0 6px' }}>Live performance, latest window{m.performance.rows ? ` (${m.performance.rows} rows)` : ''}</p>
-                <div className="metric-grid">{Object.entries(m.performance.metrics).map(([k, v]) => <div key={k} className="metric"><span className="xs mute">{k.replace(/_/g, ' ')}</span><b className="num">{Math.round(v * 10000) / 10000}</b></div>)}</div></div>
+                <div className="metric-grid">{Object.entries(m.performance.metrics).map(([k, v]) => <div key={k} className="metric"><span className="xs mute">{perfLabel(k, m.performance.positiveLabel)}</span><b className="num">{Math.round(v * 10000) / 10000}</b></div>)}</div>
+                {m.performance.positiveLabel != null && <p className="xs mute" style={{ marginTop: 6 }}>"Positive class" is label {m.performance.positiveLabel}: the share of real cases caught (recall) and of alerts that were right (precision). The weighted figures average over both classes and can look good while real cases are missed.</p>}</div>
+            )}
+            {(() => {
+              const cmp = compareMetrics(s.card?.metrics, m.performance?.metrics);
+              if (!cmp.length) return null;
+              const bad = cmp.filter((x) => x.breach);
+              return (
+                <div className={`verdict ${bad.length ? 'bad' : 'ok'}`}>{bad.length ? <AlertTriangle size={18} aria-hidden /> : <CheckCircle2 size={18} aria-hidden />}
+                  <div className="small"><b>{bad.length ? `${bad.length} live metric${bad.length > 1 ? 's are' : ' is'} more than 5 points below the value on the AI card` : 'Live metrics are in line with the AI card'}</b>
+                    <div className="xs">{cmp.map((x) => `${x.name}: card ${Math.round(x.approved * 1000) / 1000}, live ${Math.round(x.live * 1000) / 1000}`).join(' · ')}</div>
+                    {bad.length > 0 && s.stage === 7 && <div className="xs" style={{ marginTop: 4 }}>Raise an incident or a change on the lifecycle tab, or update the AI card if the approved value has changed.</div>}</div></div>
+              );
+            })()}
+            {m.performance?.slices?.length > 0 && (
+              <div><p className="xs mute" style={{ margin: '0 0 6px' }}>By group, latest window. Look for a group well below the others.</p>
+                <table className="table small"><thead><tr><th>Group</th><th>Rows</th>{sliceCols(m.performance.slices).map((k) => <th key={k}>{perfLabel(k, m.performance.positiveLabel)}</th>)}</tr></thead>
+                  <tbody>{m.performance.slices.map((x) => (
+                    <tr key={`${x.key}|${x.value}`}><td>{x.key}: <b>{x.value}</b></td><td className="num">{x.rows ?? '—'}</td>
+                      {sliceCols(m.performance.slices).map((k) => <td key={k} className="num">{x.metrics[k] != null ? Math.round(x.metrics[k] * 1000) / 1000 : '—'}</td>)}</tr>
+                  ))}</tbody></table></div>
             )}
             {m.notes?.length > 0 && <p className="xs mute">{m.notes.join('. ')}</p>}
           </div>

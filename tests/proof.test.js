@@ -180,3 +180,36 @@ test('a missing table privilege is explained with the grant that fixes it', asyn
   const m = await readMonitoring({ base: 'https://x', token: 't', table: 'w.d.inf', warehouseId: 'abcdef1234567890' }, { fetchImpl: f });
   assert.match(m.notes.join(), /a@b\.com has no SELECT on w\.d\.inf_drift_metrics\. Its owner can run: GRANT SELECT ON TABLE w\.d\.inf_drift_metrics TO `a@b\.com`/);
 });
+
+test('monitoring reads positive-class metrics and slices, and leaves ID and label columns out of drift', async () => {
+  const w = JSON.stringify({ start: '2026-11-05T00:00:00Z', end: '2026-11-06T00:00:00Z' });
+  const kt = (p) => JSON.stringify({ statistic: 0.2, pvalue: p });
+  const f = stub([
+    [/unity-catalog\/tables\/[^/]+$/, { table_id: 'abc-123' }],
+    [/data-quality\/v1\/monitors\/table\/abc-123/, { data_profiling_config: { status: 'MONITOR_STATUS_ACTIVE', drift_metrics_table_name: 'w.d.inf_drift_metrics', profile_metrics_table_name: 'w.d.inf_profile_metrics',
+      inference_log: { timestamp_col: 'scored_at', label_col: 'sepsis_label', prediction_col: 'prediction', model_id_col: 'model_version' } } }],
+    [/sql\/statements/, (url, opts) => {
+      const st = JSON.parse(opts.body).statement;
+      const body = st.includes('drift') ? sqlResult(['window', 'column_name', 'drift_type', 'js_distance', 'population_stability_index', 'ks_test', 'slice_key'],
+        [[w, 'encounter_id', 'CONSECUTIVE', '0.9', '0.9', kt(0.0001), null], [w, 'sepsis_label', 'CONSECUTIVE', '0.6', null, null, null], [w, 'model_version', 'CONSECUTIVE', '0.7', null, null, null],
+         [w, 'lactate', 'CONSECUTIVE', '0.15', '0.21', kt(0.01), null], [w, 'heart_rate', 'CONSECUTIVE', '0.42', '0.5', kt(0.001), null], [w, 'prediction', 'CONSECUTIVE', '0.12', null, null, null], [w, 'age', 'CONSECUTIVE', '0.01', '0.01', kt(0.9), null]])
+        : sqlResult(['window', 'column_name', 'count', 'accuracy_score', 'precision', 'recall', 'f1_score', 'slice_key', 'slice_value'], [
+          [w, ':table', '2000', '0.9', '{"one_vs_all":{"0":0.95,"1":0.7},"macro":0.82,"weighted":0.91}', '{"one_vs_all":{"0":0.97,"1":0.62},"macro":0.8,"weighted":0.92}', '{"one_vs_all":{"0":0.96,"1":0.66},"macro":0.81,"weighted":0.915}', null, null],
+          [w, ':table', '900', '0.88', '{"one_vs_all":{"0":0.9,"1":0.6},"macro":0.75,"weighted":0.85}', '{"one_vs_all":{"0":0.9,"1":0.5},"macro":0.7,"weighted":0.86}', null, 'sex', 'F'],
+          [w, ':table', '1100', '0.92', '{"one_vs_all":{"0":0.9,"1":0.8},"macro":0.85,"weighted":0.9}', '{"one_vs_all":{"0":0.9,"1":0.72},"macro":0.81,"weighted":0.9}', null, 'sex', 'M']]);
+      return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+    }],
+  ]);
+  const m = await readMonitoring({ base: 'https://dbc.example.com', token: 't', table: 'w.d.inf', warehouseId: 'abcdef1234567890' }, { fetchImpl: f });
+  // drift: the ID, the label and the model id columns are not inputs; the worst drifted input comes first
+  assert.deepEqual(m.drift.drifted.map((d) => d.column), ['heart_rate', 'lactate', 'prediction']);
+  assert.deepEqual(m.drift.skipped.sort(), ['encounter_id', 'model_version', 'sepsis_label']);
+  assert.equal(m.drift.checked, 4);
+  // performance: the weighted figures stay, and the positive class is reported on its own
+  assert.equal(m.performance.metrics.recall, 0.92);
+  assert.equal(m.performance.metrics.recall_positive, 0.62);
+  assert.equal(m.performance.metrics.precision_positive, 0.7);
+  assert.equal(m.performance.metrics.f1_positive, 0.66);
+  assert.equal(m.performance.positiveLabel, '1');
+  assert.deepEqual(m.performance.slices.map((s) => [s.key, s.value, s.rows, s.metrics.recall_positive]), [['sex', 'F', 900, 0.5], ['sex', 'M', 1100, 0.72]]);
+});

@@ -4,14 +4,15 @@ import { PRINCIPLES, PRINCIPLE_IDS, TIERS } from '../data/frameworks.js';
 import { STAGES } from '../data/lifecycle.js';
 import { deadlinesFor } from '../data/deadlines.js';
 import { controlStatus, compassScores, COMPASS, COMPASS_IDS, itemState } from '../data/controls.js';
-import { scoreAssessment, sectionName, sectionOrder, isUnknown } from './engine.js';
+import { scoreAssessment, sectionName, sectionOrder, isUnknown, scoringOf } from './engine.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
 // Residual score if every "Started" control reached "In place", and if every "Not known" were found to be "In place".
 export function whatIf(s) {
   const a = s.assessment; if (!a) return null;
-  const run = (answers) => scoreAssessment(a.profile, a.frameworks, a.questions, answers).residual;
+  // Same scoring version and the same open breach signals as the stored result, so 'now' and 'after' compare like with like.
+  const run = (answers) => scoreAssessment(a.profile, a.frameworks, a.questions, answers, {}, { version: scoringOf(a), signals: a.results?.signals || [] }).residual;
   const started = a.questions.filter((q) => a.answers[q.id] === 1).map((q) => q.id);
   const unknown = a.questions.filter((q) => isUnknown(a.answers[q.id])).map((q) => q.id);
   const bump = (ids, to) => ({ ...a.answers, ...Object.fromEntries(ids.map((id) => [id, to])) });

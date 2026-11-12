@@ -9,7 +9,8 @@ import { AuthScreen, PendingScreen } from '../pages/Auth.jsx';
 import { removeEvidence } from '../lib/files.js';
 import { requiredApprovals, nextStage, stageOf, ROLES } from '../data/lifecycle.js';
 import { TIERS, SELECTABLE_FRAMEWORKS } from '../data/frameworks.js';
-import { rescore, buildActions, controlGaps, effectiveAnswers, isStaged, isProvisional } from '../engine/engine.js';
+import { rescore, buildActions, controlGaps, effectiveAnswers, isStaged, isProvisional, scoringOf } from '../engine/engine.js';
+import { breachSignals, goLiveBlockers, conditionAction, approvedVersionEntry, bulkTickable, INCIDENT_SEVERITY, SERIOUS_KINDS } from '../engine/governance.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
 import { buildControlQuestions } from '../lib/buildQuestions.js';
 import { registryOpen } from '../lib/registryStage.js';
@@ -95,6 +96,8 @@ export function stageBlockers(sys, rules = {}) {
       if (g.unsupported) out.push(`${g.unsupported} control answer${g.unsupported > 1 ? 's' : ''} still need${g.unsupported > 1 ? '' : 's'} evidence`);
     }
   }
+  // Go-live: conditions set at earlier gates and overdue high-priority actions must be settled first.
+  out.push(...goLiveBlockers(sys));
   return out;
 }
 
@@ -128,7 +131,9 @@ export function archiveRound(x, n) {
 // did not come from the assessment (skipped checks and the like), are kept.
 export function withScore(x, cutoffs = {}, note = false) {
   const a = x.assessment;
-  const results = rescore(a, cutoffs);
+  // Open breach signals (an open incident, overdue high-priority actions, an unapproved model version) suspend
+  // control credit for assessments on scoring version 2; version 1 results are never changed by them.
+  const results = rescore(a, cutoffs, breachSignals(x));
   const fresh = buildActions(a.questions || [], effectiveAnswers(a.answers, a.review), results.tier, new Date(), a.profile);
   const fromAssessment = (k) => k.source === 'assessment' || k.source === 'unknown';
   const keep = (x.actions || []).filter((k) => k.status === 'Done' || !fromAssessment(k));
@@ -136,7 +141,7 @@ export function withScore(x, cutoffs = {}, note = false) {
   // An open action for the same question keeps its id, owner and due date.
   const merged = fresh.filter((f) => !keep.some((k) => k.qid === f.qid && k.status === 'Done')).map((f) => {
     const old = open.find((k) => k.qid === f.qid);
-    return old ? { ...f, id: old.id, owner: old.owner, due: old.due } : f;
+    return old ? { ...f, id: old.id, owner: old.owner, due: old.due, status: old.status || f.status } : f;
   });
   const last = (x.history || []).at(-1);
   const moved = !last || last.tier !== results.tier || last.residual !== results.residual || last.readiness !== results.readiness;
@@ -146,6 +151,10 @@ export function withScore(x, cutoffs = {}, note = false) {
   };
 }
 
+// Re-score after something that can open or close a breach signal (an approval, an incident, a new model version,
+// an action completed or re-dated). Only for assessments on scoring version 2.
+export const settle = (x, cutoffs = {}) => (x?.assessment?.results && scoringOf(x.assessment) >= 2 && x.status !== 'Draft' ? withScore(x, cutoffs, true) : x);
+
 // Approving stage 2 confirms the control assessment: from here the controls count towards the tier.
 function confirmControls(before, after, cutoffs) {
   if (before.stage !== 2 || after.stages?.[2]?.status !== 'approved' || !isProvisional(after.assessment)) return after;
@@ -154,12 +163,19 @@ function confirmControls(before, after, cutoffs) {
 
 function advanceFrom(x, n, conditions = '') {
   const tier = x.assessment.results.tier;
-  const stages = { ...x.stages, [n]: { ...x.stages[n], status: 'approved', approvedAt: nowIso(), conditions } };
-  if (n === 10) return { ...x, stages, status: 'Retired' };
+  const at = nowIso();
+  const stages = { ...x.stages, [n]: { ...x.stages[n], status: 'approved', approvedAt: at, conditions } };
+  // A condition of approval becomes a tracked high-priority action, so it cannot be forgotten once the stage is passed.
+  const cond = conditionAction(n, conditions, new Date(at));
+  const actions = cond ? [...(x.actions || []), cond] : x.actions;
+  if (n === 10) return { ...x, actions, stages, status: 'Retired' };
   const to = nextStage(n);
   const reset = to === n || x.stages[to]?.status === 'approved' || (to === 7 && n !== 7);
-  const out = { ...x, rounds: reset ? archiveRound({ ...x, stages }, to) : x.rounds, stages: { ...stages, [to]: reset ? newStage() : x.stages[to] || newStage() }, stage: to };
+  const out = { ...x, actions, rounds: reset ? archiveRound({ ...x, stages }, to) : x.rounds, stages: { ...stages, [to]: reset ? newStage() : x.stages[to] || newStage() }, stage: to };
   if (!out.rounds) delete out.rounds;
+  // Go-live and change approvals record the model version they cover, so a later "new version" alert can be settled.
+  const ver = n === 6 || n === 8 ? approvedVersionEntry(x, n, at) : null;
+  if (ver) out.approvedVersions = [...(x.approvedVersions || []), ver].slice(-50);
   if (n === 6 || n === 7 || n === 8 || n === 9) {
     out.status = 'In production';
     out.nextReview = new Date(Date.now() + TIERS[tier].review * 30 * 86400000).toISOString().slice(0, 10);
@@ -552,12 +568,15 @@ export function StoreProvider({ children, standalone = null }) {
         const skipped = { ...(rec.skipped || {}) }; delete skipped[item];
         return { ...x, actions: dropSkipAction(x.actions, n, item), stages: { ...x.stages, [n]: { ...rec, skipped } } };
       }, 'Skip withdrawn', `Stage ${n}: ${item}`),
-      // Ticks every item that is not skipped; skipped items keep their reason.
-      checkAll: (id, n, items) => CAN.work(state.role) && updateSystem(id, (x) => {
+      // Ticks the optional items that are not skipped. Mandatory checks are never ticked in bulk: each one is a
+      // statement that a control is in place, so it is ticked on its own. Existing ticks and skips are kept.
+      checkAll: (id, n, items) => CAN.work(state.role) && updateSystem(id, (x, s) => {
         if (!workable(x, n)) return x;
         const rec = x.stages[n] || newStage();
-        return { ...x, stages: { ...x.stages, [n]: { ...rec, checklist: Object.fromEntries(items.filter((i) => !rec.skipped?.[i]).map((i) => [i, true])) } } };
-      }, 'All checks ticked', `Stage ${n}`),
+        const add = bulkTickable(items, x.assessment?.results?.tier, s.settings.checklistRules).filter((i) => !rec.skipped?.[i] && !rec.checklist?.[i]);
+        if (!add.length) return x;
+        return { ...x, stages: { ...x.stages, [n]: { ...rec, checklist: { ...rec.checklist, ...Object.fromEntries(add.map((i) => [i, true])) } } } };
+      }, 'Optional checks ticked', `Stage ${n}`),
       setEvidence: (id, n, item, value) => CAN.work(state.role) && updateSystem(id, (x) => {
         if (!workable(x, n)) return x;
         const rec = x.stages[n] || newStage();
@@ -588,22 +607,32 @@ export function StoreProvider({ children, standalone = null }) {
           const approvals = { ...rec.approvals, [role]: { outcome, comment, at: nowIso() } };
           const withApproval = { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...rec, approvals, log: log2 } } };
           const done = need.every((r) => approvals[r] && approvals[r].outcome !== 'Returned');
-          y = done ? confirmControls(x, advanceFrom(withApproval, n, outcome === 'Approved with conditions' ? comment : ''), s.settings.cutoffs) : withApproval;
+          // Conditions from every approver of this round are kept, not only the last one to sign.
+          const conditions = need.map((r) => approvals[r]).filter((p) => p?.outcome === 'Approved with conditions' && String(p.comment || '').trim()).map((p) => p.comment.trim()).join(' | ');
+          y = done ? settle(confirmControls(x, advanceFrom(withApproval, n, conditions), s.settings.cutoffs), s.settings.cutoffs) : withApproval;
         }
         const next = { ...s, systems: s.systems.map((z) => (z.id === id ? y : z)), notes: note ? [...(s.notes || []), note] : s.notes };
         return log(next, `Stage ${outcome === 'Returned' ? 'returned' : 'approved'}`, id, `Stage ${n}${comment ? `: ${comment}` : ''}`);
       }),
       override: (id, n, reason) => CAN.override(state.role) && updateSystem(id, (x) => {
         if (x.stage !== n || ['Retired', 'Withdrawn', 'Blocked', 'Draft'].includes(x.status) || x.stages?.[n]?.status === 'approved') return x;
-        return confirmControls(x, advanceFrom({
+        return settle(confirmControls(x, advanceFrom({
           ...x, stages: { ...x.stages, [n]: { ...(x.stages[n] || newStage()), log: [...(x.stages[n]?.log || []), { at: nowIso(), who: 'lead', outcome: 'Overridden', comment: reason }], approvals: { ...(x.stages[n]?.approvals || {}), lead: { outcome: 'Approved with conditions', comment: `Override: ${reason}`, at: nowIso() } } } },
-        }, n, `Override: ${reason}`), state.settings.cutoffs);
+        }, n, `Override: ${reason}`), state.settings.cutoffs), state.settings.cutoffs);
       }, 'Gate overridden', `Stage ${n}: ${reason}`),
-      startEvent: (id, kind, text) => CAN.raiseEvent(state.role) && updateSystem(id, (x) => {
+      // meta (incidents only): { severity, seriousKind, personalData }. It sets the reporting clocks shown on the stage.
+      startEvent: (id, kind, text, meta = {}) => CAN.raiseEvent(state.role) && updateSystem(id, (x, s) => {
         const to = { change: 8, incident: 9, retire: 10 }[kind];
         if (!to || x.stage !== 7 || x.status !== 'In production') return x;
-        return { ...x, stage: to, rounds: archiveRound(x, to), stages: { ...x.stages, [to]: newStage() }, events: [...(x.events || []), { at: nowIso(), kind, text }] };
-      }, { change: 'Change raised', incident: 'Incident reported', retire: 'Retirement started' }[kind], text),
+        const extra = kind === 'incident' ? {
+          severity: INCIDENT_SEVERITY.some((v) => v.id === meta.severity) ? meta.severity : 'significant',
+          ...(meta.severity === 'serious' ? { seriousKind: SERIOUS_KINDS.some((v) => v.id === meta.seriousKind) ? meta.seriousKind : 'general' } : {}),
+          personalData: !!meta.personalData,
+        } : kind === 'change' && x.connector?.latest != null ? { version: String(x.connector.latest) } : {};   // the version this change review covers
+        const y = { ...x, stage: to, rounds: archiveRound(x, to), stages: { ...x.stages, [to]: newStage() }, events: [...(x.events || []), { at: nowIso(), kind, text, ...extra }] };
+        return kind === 'incident' ? settle(y, s.settings.cutoffs) : y;   // an open incident suspends control credit
+      }, { change: 'Change raised', incident: 'Incident reported', retire: 'Retirement started' }[kind],
+      kind === 'incident' ? `${INCIDENT_SEVERITY.find((v) => v.id === meta.severity)?.label || 'Significant'}${meta.personalData ? ', personal data affected' : ''}: ${text}` : text),
 
       // ----- actions and data -----
       // AI card: the client documents the use case. Each save is a numbered version listing what changed.
@@ -657,7 +686,7 @@ export function StoreProvider({ children, standalone = null }) {
         const driftNew = dr?.drifted?.length > 0 && dr.windowEnd && dr.windowEnd !== x0.connector.monitoring?.drift?.windowEnd
           && !(x0.connector.alerts || []).some((a) => a.kind === 'drift' && a.windowEnd === dr.windowEnd);
         const canRaise = CAN.raiseEvent(state.role) && x0.stage === 7 && x0.status === 'In production';
-        updateSystem(id, (x) => {
+        updateSystem(id, (x, s) => { const out = (() => {
           if (!x.connector) return x;
           let c = { ...x.connector, info: result.info || x.connector.info || null, versions: (result.versions || []).slice(0, 50), latest: result.latest || null, lastSync: nowIso(),
             genai: result.genai || null, monitoring: result.monitoring || null };
@@ -667,8 +696,10 @@ export function StoreProvider({ children, standalone = null }) {
           const y = { ...x, updatedAt: nowIso(), connector: { ...c, seenVersion: String(result.latest), alerts: [...(c.alerts || []), alert].slice(-20) } };
           if (!canRaise) return y;
           const text = `New model version ${result.latest} registered in ${c.model} (was ${x.connector.seenVersion}). Review the change before it is used.`;
-          return { ...y, stage: 8, rounds: archiveRound(y, 8), stages: { ...y.stages, 8: newStage() }, events: [...(y.events || []), { at: nowIso(), kind: 'change', text, auto: true }] };
-        }, fresh ? (canRaise ? 'Change raised' : 'New model version found') : driftNew ? 'Drift detected' : null,
+          return { ...y, stage: 8, rounds: archiveRound(y, 8), stages: { ...y.stages, 8: newStage() }, events: [...(y.events || []), { at: nowIso(), kind: 'change', text, auto: true, version: String(result.latest) }] };
+        })();
+        // A version nobody has approved yet is a breach signal: re-score so the product shows it straight away.
+        return fresh && out !== x ? settle(out, s.settings.cutoffs) : out; }, fresh ? (canRaise ? 'Change raised' : 'New model version found') : driftNew ? 'Drift detected' : null,
         fresh ? `Version ${result.latest} in ${x0.connector.model}` : driftNew ? `${dr.drifted.length} column${dr.drifted.length === 1 ? '' : 's'} drifted in ${result.monitoring.table}: ${dr.drifted.map((d) => d.column).slice(0, 5).join(', ')}` : undefined);
         return fresh ? (canRaise ? 'raised' : 'found') : driftNew ? 'drift' : 'same';
       },
@@ -700,9 +731,11 @@ export function StoreProvider({ children, standalone = null }) {
       updateControl: (id, cid, patch) => (CAN.work(state.role) || CAN.review(state.role)) && updateSystem(id, (x) => ({
         ...x, customControls: (x.customControls || []).map((k) => (k.id === cid ? { ...k, ...patch } : k)),
       }), 'Control updated', `${cid}: ${Object.entries(patch).map(([a, b]) => `${a} ${b}`).join(', ')}`),
-      updateAction: (id, actionId, patch) => CAN.work(state.role) && updateSystem(id, (x) => ({
-        ...x, actions: x.actions.map((a) => (a.id === actionId ? { ...a, ...patch } : a)),
-      }), 'Action updated', Object.entries(patch).map(([k, v]) => `${k}: ${v}`).join(', ')),
+      // Completing or re-dating an action can clear an "overdue" breach signal, so the score is settled afterwards.
+      updateAction: (id, actionId, patch) => CAN.work(state.role) && updateSystem(id, (x, s) => {
+        const y = { ...x, actions: x.actions.map((a) => (a.id === actionId ? { ...a, ...patch } : a)) };
+        return ('status' in patch || 'due' in patch) && breachSignals(x).length !== breachSignals(y).length ? settle(y, s.settings.cutoffs) : y;
+      }, 'Action updated', Object.entries(patch).map(([k, v]) => `${k}: ${v}`).join(', ')),
       setProductOwner: (id, owner) => CAN.work(state.role) && updateSystem(id, (x) => ({ ...x, owner }), 'Business owner changed', owner),
       saveData: (id, datasets, outputs) => CAN.work(state.role) && updateSystem(id, (x) => ({ ...x, datasets, outputs }), 'Data assets updated', `${datasets.length} datasets`),
 

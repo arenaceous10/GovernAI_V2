@@ -162,6 +162,8 @@ for (let i = 0; i < STEPS; i++) {
       const sn = STAGES[y.stage - 1];
       const b1 = st();
       await run(() => api().checkAll(y.id, y.stage, sn.checklist)); checkInvariants(b1, st(), { action: 'drive:checkAll' });
+      // mandatory checks are never bulk-ticked: tick the ones still open, as a client would
+      for (const item of sn.checklist) { const rec = st().systems.find((z) => z.id === y.id)?.stages?.[y.stage]; if (rec && !rec.checklist?.[item] && !rec.skipped?.[item]) await run(() => api().toggleCheck(y.id, y.stage, item)); }
       const b2 = st();
       await run(() => api().submitStage(y.id, y.stage, 'Ready for review, all checks done.')); checkInvariants(b2, st(), { action: 'drive:submit' });
       for (const who of ['assessor', 'lead']) {

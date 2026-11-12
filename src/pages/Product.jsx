@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowLeft, BookMarked, Check, CheckCircle2, ChevronDown, Circle, SkipForward, Plus, Presentation, FileText, CornerDownLeft, Database, Download, ExternalLink, Gavel, Link2, Loader2, Lock, Paperclip, RefreshCw, Send, ShieldCheck, Trash2, X } from 'lucide-react';
 import { uploadEvidence, evidenceUrl, removeEvidence, hasFile, isLink, fmtSize } from '../lib/files.js';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -7,6 +7,7 @@ import { geoName } from '../data/countries.js';
 import { STAGES, stageOf, requiredApprovals, ROLES, STAGE_STATUS, GATE_STAGES, ON_DEMAND, phaseOf } from '../data/lifecycle.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
 import { sectionOf, sectionOrder, isStaged, isProvisional, controlGaps } from '../engine/engine.js';
+import { stageControlGaps, evidenceReuse, registryChecks, incidentClocks, breachSignals, bulkTickable, legalByLaw, INCIDENT_SEVERITY, SERIOUS_KINDS } from '../engine/governance.js';
 import { controlFor, itemState, isMandatory, validReason, controlStatus, stageCompletion, SKIP_REASONS, MIN_REASON, COMPASS, COMPASS_IDS } from '../data/controls.js';
 import { downloadReport } from '../engine/report.js';
 import { downloadDeck } from '../engine/deck.js';
@@ -46,6 +47,9 @@ async function openFile(v, setErr) {
   }
 }
 
+// A web link inside a longer reference ("DPIA v3: https://..."), so it can still be opened in one click.
+const linkIn = (v) => (String(v || '').match(/https?:\/\/[^\s<>"'()[\]]{4,}/i) || [])[0] || '';
+
 export function EvidenceItem({ item, value, editable, onSave, systemId, stage }) {
   const [open, setOpen] = useState(false);
   const [ref, setRef] = useState(value?.ref || '');
@@ -83,7 +87,9 @@ export function EvidenceItem({ item, value, editable, onSave, systemId, stage })
               : <span className="xs mute"><Paperclip size={11} /> {value.file} · no file uploaded</span>)}
             {value.ref && (isLink(value.ref)
               ? <a className="linkbtn xs" href={value.ref} target="_blank" rel="noopener noreferrer"><Link2 size={11} /> {value.ref} <ExternalLink size={11} /></a>
-              : <span className="xs mute"><Link2 size={11} /> {value.ref}</span>)}
+              : linkIn(value.ref)
+                ? <span className="xs mute"><Link2 size={11} /> {value.ref} <a className="linkbtn xs" href={linkIn(value.ref)} target="_blank" rel="noopener noreferrer">Open link <ExternalLink size={11} /></a></span>
+                : <span className="xs mute"><Link2 size={11} /> {value.ref}</span>)}
           </div>
         )}
         {open && (
@@ -123,13 +129,23 @@ function ReviewBox({ s, n, rec }) {
   const st = stageOf(n);
   const done = st.checklist.filter((i) => rec.checklist[i]).length + st.evidence.filter((i) => rec.evidence[i]).length;
   const skips = st.checklist.filter((i) => rec.skipped?.[i]);
+  const reuse = evidenceReuse(rec.evidence);
+  const reg = registryChecks(s);
+  const unconfirmed = st.checklist.filter((i) => rec.checklist[i] && reg[i] && !reg[i].ok);
+  const a = s.assessment;
+  const gaps = stageControlGaps(n, a.questions, a.answers, a.review);
+  const followUps = n === 6 ? (s.actions || []).filter((k) => k.source === 'condition' && Number(k.stage) < 6) : [];
   const decide = (outcome) => { reviewStage(s.id, n, mySlot, outcome, comment.trim(), internal.trim()); setComment(''); setInternal(''); toast(outcome === 'Returned' ? `Stage ${n} returned to the client` : `Stage ${n} ${outcome.toLowerCase()}`, outcome === 'Returned' ? 'warn' : 'good'); };
   return (
     <section className="panel decision">
       <div className="decision-head"><Gavel size={16} /> <h2>Your decision</h2></div>
       <p className="small mute">{done} of {st.checklist.length + st.evidence.length} items completed by the client.{rec.note ? ` Note: "${rec.note}"` : ''}</p>
       {skips.length > 0 && <div className="callout warn small"><b>{skips.length} check{skips.length > 1 ? 's' : ''} skipped.</b> Read the reasons in the checklist before you decide. Return the stage if a reason is not good enough.</div>}
-      <Field label="Comment to the client"><textarea className="input" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Needed to return or add conditions" /></Field>
+      {gaps.length > 0 && <div className="callout warn small"><b>{gaps.length} control{gaps.length > 1 ? 's that matter' : ' that matters'} at this stage {gaps.length > 1 ? 'are' : 'is'} not yet in place.</b> {gaps.slice(0, 6).map((g) => `${g.topic} (${g.level}${g.weight === 3 ? ', critical' : ''})`).join('; ')}{gaps.length > 6 ? '…' : ''}. Approve only if each has a dated action or an accepted risk.</div>}
+      {followUps.length > 0 && <div className="callout small"><b>Conditions and override follow-ups from earlier stages:</b> {followUps.map((k) => `${k.action} [${k.status}]`).join(' · ')}. They were closed by the client: check each one was really met.</div>}
+      {reuse.length > 0 && <div className="callout warn small"><b>The same evidence is attached to several items.</b> {reuse.map((g) => `"${g.label}" is used for ${g.count} items`).join('; ')}. Check that it really covers each one.</div>}
+      {unconfirmed.length > 0 && <div className="callout warn small"><b>{unconfirmed.length} ticked check{unconfirmed.length > 1 ? 's are' : ' is'} not confirmed by the model registry.</b> {unconfirmed.map((i) => reg[i].note).join('. ')}.</div>}
+      <Field label="Comment to the client" hint={(n === 6 || GATE_STAGES.includes(n)) ? 'A condition becomes a high-priority action due in 30 days; conditions from earlier gates must be closed before go-live.' : undefined}><textarea className="input" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Needed to return or add conditions" /></Field>
       <Field label={<span className="row" style={{ gap: 6 }}><Lock size={13} /> Internal note</span>} hint="Only the governance team sees this."><textarea className="input internal" rows={2} value={internal} onChange={(e) => setInternal(e.target.value)} /></Field>
       <div className="decision-actions">
         <button className="btn primary" onClick={() => decide('Approved')}><CheckCircle2 size={15} /> Approve</button>
@@ -186,7 +202,7 @@ function Activity({ rec }) {
 }
 
 // One checklist row: tick it, or (if optional) skip it with a reason. Each item names the control it evidences.
-function CheckItem({ item, rec, editable, mandatory, onToggle, onSkip, onUnskip }) {
+function CheckItem({ item, rec, editable, mandatory, reg, onToggle, onSkip, onUnskip }) {
   const [open, setOpen] = useState(false);
   const [cat, setCat] = useState(''); const [reason, setReason] = useState(''); const [due, setDue] = useState(''); const [err, setErr] = useState('');
   const c = controlFor(item); const st = itemState(rec, item); const sk = rec.skipped?.[item];
@@ -203,6 +219,7 @@ function CheckItem({ item, rec, editable, mandatory, onToggle, onSkip, onUnskip 
         <span className="ci-tags">
           <span className={`ci-tag ${mandatory ? 'must' : ''}`}>{mandatory ? 'Mandatory' : 'Optional'}</span>
           <span className="ci-tag ctl" title={`${c.name} · ${c.family} · ${c.type}`}>{c.id}</span>
+          {reg && <span className={`ci-tag ${reg.ok ? 'reg-ok' : 'reg-no'}`} title={reg.note}>{reg.ok ? 'Confirmed by registry' : 'Not confirmed by registry'}</span>}
         </span>
         {editable && !mandatory && st === 'open' && !open && <button type="button" className="btn ghost sm ci-skip-btn" onClick={() => setOpen(true)} aria-label={`Skip with a reason: ${item}`}><SkipForward size={13} /> Skip with reason</button>}
         {editable && st === 'skipped' && <button type="button" className="btn ghost sm" onClick={onUnskip}>Undo skip</button>}
@@ -262,18 +279,19 @@ function StageScale({ st, rec, tier, rules, blockers, working }) {
   );
 }
 
-function ChecklistView({ st, rec, editable, tier, rules, onToggle, onAll, onSkip, onUnskip }) {
+function ChecklistView({ st, rec, editable, tier, rules, reg = {}, onToggle, onAll, onSkip, onUnskip }) {
   const done = st.checklist.filter((i) => rec.checklist[i]).length;
+  const optionalOpen = bulkTickable(st.checklist, tier, rules).filter((i) => itemState(rec, i) === 'open').length;
   const skipped = st.checklist.filter((i) => itemState(rec, i) === 'skipped').length;
   const mand = st.checklist.filter((i) => isMandatory(i, tier, rules)).length;
   return (
-    <Panel title="Checklist" sub={`${mand} mandatory, ${st.checklist.length - mand} optional. Optional checks can be skipped with a reason.`}
+    <Panel title="Checklist" sub={`${mand} mandatory, ${st.checklist.length - mand} optional. Each mandatory check is ticked on its own. Optional checks can be skipped with a reason.`}
       right={<span className="count-chip num">{done}/{st.checklist.length}{skipped ? ` · ${skipped} skipped` : ''}</span>}>
       {st.checklist.map((item) => (
-        <CheckItem key={item} item={item} rec={rec} editable={editable} mandatory={isMandatory(item, tier, rules)}
+        <CheckItem key={item} item={item} rec={rec} editable={editable} mandatory={isMandatory(item, tier, rules)} reg={reg[item]}
           onToggle={() => onToggle(item)} onSkip={(v) => onSkip(item, v)} onUnskip={() => onUnskip(item)} />
       ))}
-      {editable && done + skipped < st.checklist.length && <button type="button" className="btn ghost sm" style={{ marginTop: 6, paddingLeft: 0 }} onClick={onAll}>Tick all</button>}
+      {editable && optionalOpen > 1 && <button type="button" className="btn ghost sm" style={{ marginTop: 6, paddingLeft: 0 }} onClick={onAll}>Tick the {optionalOpen} optional checks</button>}
     </Panel>
   );
 }
@@ -285,8 +303,16 @@ function StageView({ s, n }) {
   const [howOpen, setHowOpen] = useState(false);
   const [note, setNote] = useState('');
   const [reason, setReason] = useState('');
-  const [event, setEvent] = useState({ kind: '', text: '' });
+  const [event, setEvent] = useState({ kind: '', text: '', severity: 'significant', seriousKind: 'general', personalData: false });
   const st = stageOf(n);
+  const reg = registryChecks(s);
+  const fws = s.assessment.frameworks || [];
+  const legal = legalByLaw(s.assessment.profile, fws);
+  const highRisk = ['high', 'unacceptable'].includes(s.assessment.results.legal?.tier);
+  const incident = n === 9 ? [...(s.events || [])].reverse().find((e) => e.kind === 'incident') : null;
+  const clocks = incident && n === s.stage ? incidentClocks(incident, fws, { highRisk, role: legal.EU_AI_ACT?.role }) : [];
+  const draftClocks = event.kind === 'incident' ? incidentClocks({ ...event, at: new Date().toISOString() }, fws, { highRisk, role: legal.EU_AI_ACT?.role }) : [];
+  const signals = n === s.stage ? breachSignals(s) : [];
   const rec = s.stages?.[n] || newStage();
   const isCurrent = n === s.stage && !['Retired', 'Withdrawn', 'Blocked'].includes(s.status);
   const working = isCurrent && ['open', 'returned'].includes(rec.status);
@@ -316,13 +342,27 @@ function StageView({ s, n }) {
         </section>
 
         {rec.status === 'returned' && rec.returnNote && <div className="callout warn"><b>Returned by the governance team:</b> {rec.returnNote}</div>}
-        {rec.conditions && <div className="callout"><b>Conditions:</b> {rec.conditions}</div>}
+        {rec.conditions && <div className="callout"><b>Conditions:</b> {rec.conditions} <span className="mute">Tracked as a high-priority action on the Actions tab.</span></div>}
+        {signals.length > 0 && (
+          <div className="callout warn"><b>{signals.some((x) => x.suspends) ? 'The approved picture no longer holds' : 'Worth a look'}:</b> {signals.map((x) => x.text).join('; ')}.
+            {signals.some((x) => x.suspends) && s.assessment.results.scoring >= 2 && <span> Control credit in the risk score is suspended until this is resolved.</span>}</div>
+        )}
+        {n === s.stage && stageControlGaps(n, s.assessment.questions, s.assessment.answers, s.assessment.review).length > 0 && CAN.work(role) && (
+          <div className="callout small"><b>Controls from your assessment that matter at this stage and are not yet in place:</b> {stageControlGaps(n, s.assessment.questions, s.assessment.answers, s.assessment.review).slice(0, 6).map((g) => `${g.topic} (${g.level})`).join('; ')}. The reviewer sees this list too.</div>
+        )}
+        {incident && n === s.stage && (
+          <div className={`callout ${clocks.length ? 'bad' : ''}`}><b>Incident recorded {fmtDate(incident.at)}: {INCIDENT_SEVERITY.find((v) => v.id === incident.severity)?.label || 'severity not recorded'}{incident.personalData ? ', personal data affected' : ''}.</b>
+            {clocks.length > 0 ? (
+              <ul className="list-plain small" style={{ marginTop: 6 }}>{clocks.map((c) => <li key={c.law}><b>{c.ref}:</b> {c.label}. <b>By {new Date(c.due).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}</b>{c.note ? ` ${c.note}` : ''}</li>)}</ul>
+            ) : <span className="small"> No statutory reporting clock is indicated by what was recorded. Reassess if the severity changes.</span>}
+            <div className="xs mute" style={{ marginTop: 4 }}>Deadlines run from when the incident was recorded here and are indicative: confirm them with your legal team.</div></div>
+        )}
         {isCurrent && rec.status === 'submitted' && role === 'client' && <div className="callout"><b>With the governance team.</b> Submitted {fmtDate(rec.submittedAt)}. You'll see their decision here.</div>}
         {working && !CAN.work(role) && <div className="callout small"><b>The client is working on this stage.</b> You can review it once they submit.</div>}
 
         {(isCurrent || rec.status === 'approved') && <StageScale st={st} rec={rec} tier={tier} rules={rules} blockers={blockers} working={working} />}
 
-        <ChecklistView st={st} rec={rec} editable={canEdit} tier={tier} rules={rules} onToggle={(item) => toggleCheck(s.id, n, item)} onAll={() => checkAll(s.id, n, st.checklist)}
+        <ChecklistView st={st} rec={rec} editable={canEdit} tier={tier} rules={rules} reg={reg} onToggle={(item) => toggleCheck(s.id, n, item)} onAll={() => checkAll(s.id, n, st.checklist)}
           onSkip={(item, v) => skipCheck(s.id, n, item, v)} onUnskip={(item) => unskipCheck(s.id, n, item)} />
         <Panel title="Evidence" right={<span className="count-chip num">{evCount}/{st.evidence.length}</span>}>
           {st.evidence.map((item) => (
@@ -380,7 +420,25 @@ function StageView({ s, n }) {
                 </select>
               </Field>
               <Field label="What happened"><input className="input" value={event.text} onChange={(e) => setEvent({ ...event, text: e.target.value })} /></Field>
-              <button className="btn" disabled={!event.kind || event.text.trim().length < 5} onClick={() => { startEvent(s.id, event.kind, event.text.trim()); toast({ change: 'Change review started', incident: 'Incident reported', retire: 'Retirement started' }[event.kind]); setEvent({ kind: '', text: '' }); }}>
+              {event.kind === 'incident' && (
+                <>
+                  <Field label="Severity" hint={INCIDENT_SEVERITY.find((v) => v.id === event.severity)?.hint}>
+                    <select className="input" aria-label="Incident severity" value={event.severity} onChange={(e) => setEvent({ ...event, severity: e.target.value })}>
+                      {INCIDENT_SEVERITY.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+                    </select>
+                  </Field>
+                  {event.severity === 'serious' && (
+                    <Field label="Kind of serious incident">
+                      <select className="input" aria-label="Kind of serious incident" value={event.seriousKind} onChange={(e) => setEvent({ ...event, seriousKind: e.target.value })}>
+                        {SERIOUS_KINDS.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+                      </select>
+                    </Field>
+                  )}
+                  <label className="row small" style={{ gap: 8 }}><input type="checkbox" checked={event.personalData} onChange={(e) => setEvent({ ...event, personalData: e.target.checked })} /> Personal data was exposed, lost or wrongly changed</label>
+                  {draftClocks.length > 0 && <div className="callout warn small"><b>Reporting clocks that will start:</b> {draftClocks.map((c) => `${c.ref} (${c.period})`).join('; ')}.</div>}
+                </>
+              )}
+              <button className="btn" disabled={!event.kind || event.text.trim().length < 5} onClick={() => { startEvent(s.id, event.kind, event.text.trim(), { severity: event.severity, seriousKind: event.seriousKind, personalData: event.personalData }); toast({ change: 'Change review started', incident: 'Incident reported', retire: 'Retirement started' }[event.kind]); setEvent({ kind: '', text: '', severity: 'significant', seriousKind: 'general', personalData: false }); }}>
                 {{ change: 'Start change review', incident: 'Report incident', retire: 'Start retirement', '': 'Start' }[event.kind]}
               </button>
             </div>
@@ -393,6 +451,9 @@ function StageView({ s, n }) {
 
 function Lifecycle({ s }) {
   const [view, setView] = useState(s.stage);
+  // When the product moves (an incident or change is raised, a stage is approved) the view follows it, so the new
+  // stage and anything urgent on it, such as incident reporting clocks, is in front of the person at once.
+  useEffect(() => { setView(s.stage); }, [s.stage]);
   return (
     <div className="stack">
       <section className="panel"><LifecycleRail s={s} viewing={view} onPick={setView} /></section>
@@ -855,7 +916,7 @@ export default function Product({ id, nav, back }) {
       <ControlsBanner s={s} nav={nav} />
       <Tabs value={tab} onChange={setTab} tabs={[['lifecycle', 'Lifecycle'], ['overview', 'Risk and score'], ['assessment', 'Assessment'], ['data', 'Data and lineage'], ['actions', `Actions (${open})`], ['history', 'History'], ['record', 'Record']]} />
       <div key={tab} className="fade-in">
-        {tab === 'overview' && <Results results={r} frameworks={s.assessment.frameworks} />}
+        {tab === 'overview' && <Results results={r} frameworks={s.assessment.frameworks} profile={s.assessment.profile} />}
         {tab === 'lifecycle' && <Lifecycle s={s} />}
         {tab === 'assessment' && <Assessment s={s} nav={nav} />}
         {tab === 'data' && <DataTab s={s} />}

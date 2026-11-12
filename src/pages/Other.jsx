@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FRAMEWORKS, SELECTABLE_FRAMEWORKS, TIER_ORDER, PRINCIPLES, PRINCIPLE_IDS, PROFILE_QUESTIONS, TIER_CUTOFFS, cutoffsFor } from '../data/frameworks.js';
+import { FRAMEWORKS, SELECTABLE_FRAMEWORKS, TIER_ORDER, PRINCIPLES, PRINCIPLE_IDS, PROFILE_QUESTIONS, TIER_CUTOFFS, cutoffsFor, scaleFor } from '../data/frameworks.js';
 import { LEVEL_NAMES, LEVEL_SCORES } from '../data/questionBank.js';
 import { ROLES, STAGES, CORE_RULE, GATE_STAGES } from '../data/lifecycle.js';
 import { ADAPTIVE_SHARE } from '../engine/engine.js';
@@ -183,19 +183,29 @@ export function Methodology() {
             <thead><tr><th>Principle</th><th>Weight</th><th>Questions</th></tr></thead>
             <tbody>{PRINCIPLE_IDS.map((p) => <tr key={p}><td>{PRINCIPLES[p].name}<div className="xs mute">{PRINCIPLES[p].tagline}</div></td><td className="num">{PRINCIPLES[p].weight}</td><td className="num">{PROFILE_QUESTIONS.filter((q) => q.principle === p).length}</td></tr>)}</tbody>
           </table>
-          <p className="xs mute" style={{ marginTop: 8 }}>Each answer rates its principle 1 to 3. A principle's risk is its average, scaled to 0 to 100; the weighted total is the risk score. Controls in place lower it by up to 35%.</p>
+          <ul className="list-plain xs mute" style={{ marginTop: 8 }}>
+            <li>Each answer rates its principle 1 to 3. A principle's risk is 40% its worst item and 60% the average of its items, scaled to 0 to 100, so one serious exposure is not averaged away. The weighted total is the risk score.</li>
+            <li>Stakes floor: when an output can decide access to something essential, or a failure can cause serious harm, no principle is rated below Medium.</li>
+            <li>The type of AI is rated by how it is used: one step lower when a person makes every decision, one step higher when outputs take effect without review. Agents and biometric identification stay at the top rating.</li>
+            <li>Controls lower a principle's risk by up to 35%, principle by principle. A principle earns no credit while one of its critical controls is not yet in place.</li>
+            <li>Control credit is suspended while an incident is open, a high-priority action is overdue, or a model version in the registry has not been approved.</li>
+            <li>Products assessed before these rules keep the earlier method (plain averages, one overall control credit, cut-offs by law) until they are re-assessed, so a confirmed result can always be reproduced.</li>
+          </ul>
         </Panel>
-        <Panel title="Tier cut-offs by framework" sub="The strictest framework in scope sets the cut-offs.">
+        <Panel title="Tier cut-offs" sub="One scale for every product. The laws in scope set legal floors and are reported one by one; they do not move the scale.">
           <table className="table">
-            <thead><tr><th>Framework</th><th>Limited from</th><th>High from</th></tr></thead>
+            <thead><tr><th>Applies to</th><th>Limited from</th><th>High from</th></tr></thead>
             <tbody>
+              <tr><td><b style={{ fontWeight: 600 }}>Every product</b></td><td className="num">{scaleFor(custom).limited}</td><td className="num">{scaleFor(custom).high}</td></tr>
+              <tr><td colSpan={3} className="xs mute">Assessments made before the single scale, until re-assessed (the strictest law in scope applies):</td></tr>
               {SELECTABLE_FRAMEWORKS.map((k) => { const c = cutoffsFor([k], custom); return <tr key={k}><td>{FRAMEWORKS[k].name}</td><td className="num">{c.limited}</td><td className="num">{c.high}</td></tr>; })}
               <tr><td className="mute">No framework</td><td className="num">{(custom.DEFAULT || TIER_CUTOFFS.DEFAULT).limited}</td><td className="num">{(custom.DEFAULT || TIER_CUTOFFS.DEFAULT).high}</td></tr>
             </tbody>
           </table>
           <ul className="list-plain xs mute" style={{ marginTop: 8 }}>
             <li>Unacceptable: any prohibited practice, whatever the score.</li>
-            <li>With the EU AI Act in scope, an Annex III use is at least High (unless narrow and no profiling) and Art. 50 uses are at least Limited.</li>
+            <li>With the EU AI Act in scope, an Annex III use is at least High (unless narrow and no profiling), an Annex I product or safety component is High, and Art. 50 uses are at least Limited.</li>
+            <li>GDPR and the DPDP Act set no tier. Their position (DPIA, Art. 22, Significant Data Fiduciary check, children's data) is shown beside the result.</li>
           </ul>
           <div className="row" style={{ marginTop: 10 }}>{TIER_ORDER.map((t) => <TierBadge key={t} tier={t} />)}</div>
         </Panel>

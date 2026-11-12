@@ -1,6 +1,7 @@
 // Demo portfolio across three client organisations, spread over the ten lifecycle stages, built with the same engine a real submission uses.
-import { emptyProfile, buildQuestionnaire, scoreAssessment, buildActions, profileFlags } from '../engine/engine.js';
+import { emptyProfile, buildQuestionnaire, scoreAssessment, buildActions, profileFlags, SCORING_VERSION } from '../engine/engine.js';
 import { requiredApprovals, STAGES } from '../data/lifecycle.js';
+import { breachSignals } from '../engine/governance.js';
 import { TIERS, DEMO_CLIENTS } from '../data/frameworks.js';
 
 function rng(seedText) {
@@ -199,10 +200,14 @@ export function buildSeed() {
       status: blocked ? 'Blocked' : stage >= 7 ? 'In production' : 'Active', stage, stages,
       nextReview: stage >= 7 ? new Date(today.getTime() + (d.reviewOffset ?? 120) * 86400000).toISOString().slice(0, 10) : null,
       events: d.incident ? [{ at: at(110), kind: 'incident', text: d.incident }] : [],
-      assessment: { at: created.toISOString(), by: 'client', profile, frameworks: d.fws, questions, answers, results, questionSource: 'Rule-based tailoring' },
+      assessment: { at: created.toISOString(), by: 'client', scoring: SCORING_VERSION, profile, frameworks: d.fws, questions, answers, results, questionSource: 'Rule-based tailoring' },
       history: [{ at: created.toISOString(), tier, inherent: results.inherent, residual: results.residual, readiness: results.readiness }],
       datasets: d.datasets, outputs: d.outputs, actions, draft: null, ...(d.card ? { card: { ...d.card, version: 1, updatedAt: at(99), versions: [{ version: 1, at: at(99), by: 'client', byName: profile.owner, changed: Object.keys(d.card) }] } } : {}),
     });
+    // Products in production carry their open breach signals (for example overdue high-priority actions), exactly
+    // as the app would score them.
+    const sys = systems.at(-1); const sig = breachSignals(sys, today);
+    if (sig.length) sys.assessment.results = scoreAssessment(profile, d.fws, questions, answers, {}, { signals: sig });
     audit.push({ at: created.toISOString(), actor: 'client', org: d.client, action: 'Registered', target: id, detail: `${profile.name}: ${TIERS[tier].label} risk, score ${results.residual}` });
     for (const n of Object.keys(stages)) if (stages[n].status === 'approved') audit.push({ at: stages[n].approvedAt, actor: 'assessor', action: 'Stage approved', target: id, detail: `Stage ${n}` });
   });

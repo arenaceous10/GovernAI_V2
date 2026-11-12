@@ -2,11 +2,11 @@ import { useMemo, useRef, useState } from 'react';
 import { Check, Loader2, Sparkles } from 'lucide-react';
 import {
   ANNEX_III, DATA_CATEGORIES, DOMAINS, FRAMEWORKS, PROFILE_QUESTIONS, PROHIBITED, PRINCIPLES, PRINCIPLE_IDS, PILLARS,
-  SOURCING, SYSTEM_TYPES, TRANSPARENCY, suggestFrameworks, selectionLabel, systemTypeLabel,
+  SOURCING, SYSTEM_TYPES, TRANSPARENCY, suggestFrameworks, selectionLabel, systemTypeLabel, EU_ROLES, euRoles,
 } from '../data/frameworks.js';
 import { COUNTRIES, REGIONS } from '../data/countries.js';
 import {
-  emptyProfile, sectionOf, sectionOrder, scoreAssessment, buildActions, UNKNOWN, FLOW, isStaged, rescore, refreshQuestions,
+  emptyProfile, sectionOf, sectionOrder, scoreAssessment, buildActions, UNKNOWN, FLOW, isStaged, rescore, refreshQuestions, SCORING_VERSION,
 } from '../engine/engine.js';
 import { Field, Ladder, Multi, Panel, Single, TierBadge } from '../components/ui.jsx';
 import Combobox from '../components/Combobox.jsx';
@@ -102,7 +102,7 @@ export default function NewAssessment({ nav, existing }) {
   const unanswered = questions.filter((q) => answers[q.id] == null).length;
 
   // EU-only screening is reset when the EU AI Act is not in scope.
-  const profileFor = () => clean(eu ? p : { ...p, annex: 'none', transparency: [] });
+  const profileFor = () => clean(eu ? p : { ...p, annex: 'none', annexI: 'no', euRole: '', transparency: [] });
 
   async function build() {
     const prof = profileFor();
@@ -144,7 +144,7 @@ export default function NewAssessment({ nav, existing }) {
       const qs = base.questions?.length ? refreshQuestions(base.questions, profile, fws, state.bankOverrides || {}, state.settings.customQuestions || []) : [];
       const ids = new Set(qs.map((q) => q.id));
       const keep = (o) => Object.fromEntries(Object.entries(o || {}).filter(([k]) => ids.has(k)));
-      const next = { ...base, at: new Date().toISOString(), by: state.role, profile, frameworks: fws, questions: qs, answers: keep(base.answers), evidence: keep(base.evidence), review: keep(base.review) };
+      const next = { ...base, at: new Date().toISOString(), by: state.role, scoring: SCORING_VERSION, profile, frameworks: fws, questions: qs, answers: keep(base.answers), evidence: keep(base.evidence), review: keep(base.review) };
       const id2 = register(reassess ? existing.id : draftId, meta(), { ...next, results: rescore(next, state.settings.cutoffs) }, []);
       if (id2 && !qs.length) prepareControls(id2);
       nav(`/product/${id2}`);
@@ -153,7 +153,7 @@ export default function NewAssessment({ nav, existing }) {
     if (unanswered) { setShowErr(true); return; }
     const results = scoreAssessment(profile, fws, questions, answers, state.settings.cutoffs);
     const actions = buildActions(questions, answers, results.tier, new Date(), profile);
-    const assessment = { at: new Date().toISOString(), by: state.role, profile, frameworks: fws, questions, answers, results, questionSource: source };
+    const assessment = { at: new Date().toISOString(), by: state.role, scoring: SCORING_VERSION, profile, frameworks: fws, questions, answers, results, questionSource: source };
     const id = register(reassess ? existing.id : draftId, meta(), assessment, actions);
     nav(`/product/${id}`);
   }
@@ -308,6 +308,16 @@ export default function NewAssessment({ nav, existing }) {
             {p.prohibitedAny === 'yes' && (
               <div style={{ marginTop: 14 }}>
                 <Multi options={PROHIBITED.map((x) => ({ value: x, label: x }))} value={p.prohibited} onChange={(v) => up({ prohibited: v })} />
+              </div>
+            )}
+            {eu && (
+              <div className="grid g2" style={{ marginTop: 14 }}>
+                <Field label="Is the AI itself a regulated product, or a safety component of one (Annex I)?" hint="For example a medical device or in-vitro diagnostic, machinery, a vehicle, a lift, a toy or radio equipment that needs third-party conformity assessment. If yes, it is high-risk under Art. 6(1).">
+                  <Single className="choices risk-options compact-options" options={[{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes' }]} value={p.annexI || 'no'} onChange={(v) => up({ annexI: v })} />
+                </Field>
+                <Field label="What is your role for this system under the EU AI Act?" hint={p.euRole ? EU_ROLES.find((r) => r.id === p.euRole)?.hint : `Not chosen yet: assumed "${euRoles(p).label}" from how the system is sourced. The role decides which duties, and which tailored questions, apply.`}>
+                  <Single className="choices risk-options" options={EU_ROLES.map((r) => ({ value: r.id, label: r.label }))} value={p.euRole || ''} onChange={(v) => up({ euRole: v })} />
+                </Field>
               </div>
             )}
             {eu && p.annex !== 'none' && (

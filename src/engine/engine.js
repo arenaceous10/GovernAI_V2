@@ -2,7 +2,7 @@
 // so an assessment can be re-run and audited.
 import {
   PRINCIPLES, PRINCIPLE_IDS, PROFILE_QUESTIONS, DATA_CATEGORIES, SYSTEM_TYPES, SOURCING, TIERS, TIER_ORDER,
-  FRAMEWORKS, PILLARS, ANNEX_III, ALWAYS, RAI, DG, subjectFor, familyOf, cutoffsFor,
+  FRAMEWORKS, PILLARS, ANNEX_III, ALWAYS, RAI, DG, subjectFor, familyOf, cutoffsFor, scaleFor, euRoles,
 } from '../data/frameworks.js';
 import { QUESTIONS, LEVEL_SCORES } from '../data/questionBank.js';
 import { safeUseCase, safeAvoid, knownTermsFor } from '../lib/redact.js';
@@ -11,6 +11,17 @@ export const ADAPTIVE_SHARE = 0.25;           // 25% tailored to the use case, 7
 export const ACTION_BELOW = 70;               // answers scoring below "In place" create an action
 export const READINESS_CREDIT = 0.35;         // mature controls can lower the risk score by up to 35%
 export const SEVERE_AT = 75;                  // a principle at or above this inherent risk counts as severe
+// Scoring version. Every assessment records the version it was scored with (assessment.scoring; none means 1), and
+// is always re-scored with that version, so a confirmed result can be reproduced. A re-assessment moves to the
+// current version.
+//   1: principle risk is the plain average of its items; cut-offs depend on the laws in scope; one overall
+//      readiness figure lowers the whole score.
+//   2: principle risk leans to its worst item (WORST_SHARE); a stakes floor applies; the type of AI is rated by how
+//      it is used; one cut-off scale; control credit is earned principle by principle, never by a principle with a
+//      weak critical control, and is suspended while a breach signal is open.
+export const SCORING_VERSION = 2;
+export const WORST_SHARE = 0.4;               // v2: 40% the worst item, 60% the average of all items
+export const STAKES_FLOOR = 34;               // v2: lowest principle risk (the "Medium" boundary) when stakes are highest
 // "Not known" is an answer, not a gap in the form. It is scored as the worst case until someone finds out:
 // a risk-profile question takes its highest rating, a control question scores as "Not in place" and raises
 // a "find out" action. That way not knowing can never make a product look safer than it is.
@@ -32,7 +43,7 @@ export function emptyProfile() {
   return {
     name: '', bu: '', owner: '', description: '',
     domain: '', domainOther: '', systemType: '', systemTypeOther: '', sourcing: '', sourcingOther: '', geos: [], data: [],
-    answers: {}, prohibited: [], annex: 'none', narrowTask: 'no', profiling: 'yes', transparency: [],
+    answers: {}, prohibited: [], annex: 'none', annexI: 'no', euRole: '', narrowTask: 'no', profiling: 'yes', transparency: [],
   };
 }
 
@@ -43,25 +54,42 @@ export function profileRating(qid, profile) {
   return i == null || !q?.options[i] ? 1 : q.options[i].rating;
 }
 
-function derivedRating(id, profile) {
+function derivedRating(id, profile, version = SCORING_VERSION) {
   if (id === 'data') return Math.max(1, ...(profile.data || []).map((d) => DATA_CATEGORIES.find((c) => c.id === d)?.rating || 1));
-  if (id === 'technical') return SYSTEM_TYPES.find((s) => s.id === profile.systemType)?.rating || 1;
+  if (id === 'technical') {
+    const t = SYSTEM_TYPES.find((s) => s.id === profile.systemType);
+    const base = t?.rating || 1;
+    if (version < 2) return base;
+    // The same model is a different risk depending on how its outputs are used: one step lower when a person makes
+    // every decision, one step higher when outputs take effect without review. Agents act by design and biometric
+    // identification is inherently sensitive, so they stay at 3.
+    if (t?.family === 'agent' || t?.id === 'biometric') return 3;
+    const auto = profileRating('automation', profile);
+    return Math.min(3, Math.max(1, base + (auto === 3 ? 1 : auto === 1 ? -1 : 0)));
+  }
   if (id === 'dependency') return SOURCING.find((s) => s.id === profile.sourcing)?.rating || 1;
   return 1;
 }
 const DERIVED_OF = { privacy: ['data'], robustness: ['technical'], accountability: ['dependency'] };
 
-// Inherent risk per principle: the average of its 1-3 item ratings, mapped to 0-100.
-export function principleRisk(profile) {
+// Inherent risk per principle from its 1-3 item ratings, mapped to 0-100.
+// Version 1: the plain average. Version 2: 40% the worst item and 60% the average, so one serious exposure is not
+// averaged away by unrelated low ones; and when an output can decide access to something essential or a failure can
+// cause serious harm (the "stakes"), no principle is rated below Medium on self-declared answers alone.
+export function principleRisk(profile, version = SCORING_VERSION) {
   const out = {};
+  const stakes = Math.max(profileRating('impact', profile), profileRating('harm', profile));
   for (const p of PRINCIPLE_IDS) {
     const items = [
       ...PROFILE_QUESTIONS.filter((q) => q.principle === p).map((q) => profileRating(q.id, profile)),
-      ...(DERIVED_OF[p] || []).map((d) => derivedRating(d, profile)),
+      ...(DERIVED_OF[p] || []).map((d) => derivedRating(d, profile, version)),
     ];
     const avg = items.reduce((a, b) => a + b, 0) / items.length;
-    const risk = Math.round(((avg - 1) / 2) * 100);
-    out[p] = { risk, rating: risk >= 67 ? 3 : risk >= 34 ? 2 : 1, items };
+    const level = version < 2 ? avg : WORST_SHARE * Math.max(...items) + (1 - WORST_SHARE) * avg;
+    let risk = Math.round(((level - 1) / 2) * 100);
+    const floored = version >= 2 && stakes === 3 && risk < STAKES_FLOOR;
+    if (floored) risk = STAKES_FLOOR;
+    out[p] = { risk, rating: risk >= 67 ? 3 : risk >= 34 ? 2 : 1, items, ...(floored ? { floored: true } : {}) };
   }
   return out;
 }
@@ -81,6 +109,9 @@ export function legalClass(profile, fws) {
   if (profile.prohibited?.length) return { tier: 'unacceptable', reason: 'A prohibited practice applies' };
   if (fws && !fws.includes('EU_AI_ACT')) return { tier: 'minimal', reason: 'No legal floor: the EU AI Act is not in scope' };
   const annex = profile.annex || 'none';
+  // Art. 6(1): AI that is a regulated product, or its safety component, under the Annex I harmonisation laws
+  // (medical devices, machinery, vehicles and the like). The Art. 6(3) exception does not apply to these.
+  if (profile.annexI === 'yes') return { tier: 'high', reason: 'Annex I: the AI is a regulated product or its safety component (Art. 6(1))' };
   if (annex !== 'none') {
     const label = ANNEX_III.find((a) => a.id === annex)?.label.split(':')[0];
     const derogation = profile.narrowTask === 'yes' && profile.profiling === 'no';
@@ -100,8 +131,10 @@ export function profileFlags(profile) {
   const fam = familyOf(profile.systemType);
   const t = [...(profile.transparency || []), ...(profile.systemType === 'chatbot' ? ['chat'] : []), ...(fam === 'genai' ? ['synthetic'] : [])];
   const r = (id) => profileRating(id, profile);
+  const role = euRoles(profile);
   return {
     domain: profile.domain, systemType: fam, data, annex: profile.annex,
+    provider: role.provider, deployer: role.deployer,
     automation: r('automation'),
     highRisk: legal.tier === 'high' || legal.tier === 'unacceptable',
     genai: ['genai', 'agent'].includes(fam),
@@ -129,6 +162,7 @@ const FLAG_REASONS = {
   special: 'it uses special category data', children: "it uses children's data", vulnerable: 'it affects vulnerable people',
   large: 'it affects more than 100,000 people', build: 'it is built in-house', vendor: 'it relies on a vendor',
   foundation: 'it uses a third-party foundation model', multiGeo: 'it operates in several jurisdictions',
+  provider: 'you are its provider under the EU AI Act', deployer: 'you are its deployer under the EU AI Act',
 };
 
 function whyPicked(q, flags, kwHits) {
@@ -347,6 +381,8 @@ export const FLOW = 2;
 export const isStaged = (a) => a?.flow === FLOW;
 export const isProvisional = (a) => isStaged(a) && !a.controlsConfirmedAt;
 export const isLinkRef = (v) => /^https?:\/\/\S+$/i.test(String(v || '').trim());
+// A reference counts as proof when it contains a web link, with or without words around it ("DPIA v3: https://...").
+export const hasLink = (v) => /(^|[\s(\[:;,"'])https?:\/\/[^\s<>"'()\[\]]{4,}/i.test(String(v || ''));
 
 // What an answer must be backed by: 'proof' (a file or a link), 'reference' (a line saying where it is
 // documented or who owns it, or a file) or null. "Evidenced" always needs proof. "In place" needs a reference,
@@ -358,7 +394,7 @@ export function evidenceNeed(q, answer, inherentTier) {
 }
 export function evidenceMet(need, ev) {
   if (!need) return true;
-  if (need === 'proof') return !!(ev && (String(ev.file || '').trim() || isLinkRef(ev.ref)));
+  if (need === 'proof') return !!(ev && (String(ev.file || '').trim() || hasLink(ev.ref)));
   return hasEvidence(ev);
 }
 
@@ -390,9 +426,12 @@ export function refreshQuestions(prev, profile, fws, overrides = {}, custom = []
   return orderQuestions([...kept, ...fixedQuestions(profile, fws, overrides, custom).filter((q) => !have.has(q.id))], fws);
 }
 
-// Score a product's assessment as it stands: reviewer ratings applied, provisional until stage 2 is approved.
-export function rescore(a, customCutoffs = {}) {
-  return scoreAssessment(a.profile, a.frameworks, a.questions || [], effectiveAnswers(a.answers, a.review), customCutoffs, { provisional: isProvisional(a) });
+// Score a product's assessment as it stands: reviewer ratings applied, provisional until stage 2 is approved, and
+// always with the scoring version the assessment was made with. signals: open breach signals (see breachSignals).
+export const scoringOf = (a) => (a?.scoring >= 2 ? a.scoring : 1);
+export function rescore(a, customCutoffs = {}, signals = []) {
+  return scoreAssessment(a.profile, a.frameworks, a.questions || [], effectiveAnswers(a.answers, a.review), customCutoffs,
+    { provisional: isProvisional(a), version: scoringOf(a), signals });
 }
 
 // ---------- scoring ----------
@@ -428,10 +467,14 @@ export const riskLabel = (r) => (r >= 67 ? 'High' : r >= 34 ? 'Medium' : 'Low');
 // rests on inherent risk alone. Controls can only lower the score, so a provisional tier is never more lenient.
 export function scoreAssessment(profile, fws, questions, answers, customCutoffs = {}, opts = {}) {
   const provisional = !!opts.provisional;
-  const pr = principleRisk(profile);
+  const version = opts.version === 1 ? 1 : SCORING_VERSION;
+  const v2 = version >= 2;
+  const pr = principleRisk(profile, version);
   const inherent = inherentScore(pr);
   const legal = legalClass(profile, fws);
-  const cut = cutoffsFor(fws, customCutoffs);
+  const cut = v2 ? scaleFor(customCutoffs) : cutoffsFor(fws, customCutoffs);
+  const signals = v2 ? (Array.isArray(opts.signals) ? opts.signals : []).filter((x) => x && x.id && x.text).map((x) => ({ id: String(x.id), text: String(x.text), suspends: !!x.suspends })) : [];
+  const suspended = !provisional && signals.some((x) => x.suspends);
   const severe = PRINCIPLE_IDS.filter((p) => PRINCIPLES[p].critical && pr[p].risk >= SEVERE_AT);
   const scored = questions.map((q) => ({ q, s: answerScore(q, answers[q.id]) }));
   const answered = scored.filter((x) => x.s != null);
@@ -459,18 +502,33 @@ export function scoreAssessment(profile, fws, questions, answers, customCutoffs 
     const mine = answered.filter((x) => x.q.principle === p);
     const readiness = weightedMean(mine.map((x) => ({ w: x.q.weight, s: x.s })));
     principles[p] = { risk: pr[p].risk, rating: pr[p].rating, readiness, controls: mine.length, items: pr[p].items };
+    if (v2) {
+      // Credit is earned by the controls of this principle only, and not at all while one of its critical controls
+      // (weight 3) is no better than "Started": a strong average must not hide a missing essential control.
+      const weak = mine.filter((x) => x.q.weight === 3 && x.s <= 35).length;
+      const credit = !mine.length || weak ? 0 : readiness;
+      Object.assign(principles[p], { credit, ...(pr[p].floored ? { floored: true } : {}),
+        creditNote: !mine.length ? 'No controls answered for this principle yet' : weak ? `No credit: ${weak} critical control${weak > 1 ? 's are' : ' is'} not yet in place` : '' });
+    }
   }
   const readiness = weightedMean(answered.map((x) => ({ w: x.q.weight, s: x.s }))) ?? 0;
-  const declaredResidual = Math.round(inherent * (1 - READINESS_CREDIT * (readiness / 100)));
-  const residual = provisional ? inherent : declaredResidual;
+  const declaredResidual = v2
+    ? Math.round(PRINCIPLE_IDS.reduce((s, p) => s + PRINCIPLES[p].weight * pr[p].risk * (1 - READINESS_CREDIT * (principles[p].credit / 100)), 0) / 100)
+    : Math.round(inherent * (1 - READINESS_CREDIT * (readiness / 100)));
+  const residual = provisional || suspended ? inherent : declaredResidual;
   const floor = severe.length >= 3 ? 'high' : 'minimal';
 
   const inherentTier = [legal.tier, band(inherent, cut), floor].reduce(stricter);
   const tier = [legal.tier, band(residual, cut), floor].reduce(stricter);
 
   const reasons = [`Risk score ${inherent}/100 across the six Responsible AI principles`];
-  reasons.push(`Cut-offs from ${cut.from.length ? cut.from.map((f) => FRAMEWORKS[f].name).join(', ') : 'the default policy'}: Limited at ${cut.limited}, High at ${cut.high}`);
-  if (!provisional) reasons.push(`Controls in place (${readiness}%) bring the score to ${residual}/100: ${TIERS[band(residual, cut)].label} band`);
+  const flooredNames = PRINCIPLE_IDS.filter((p) => pr[p].floored).map((p) => PRINCIPLES[p].short);
+  if (flooredNames.length) reasons.push(`Stakes floor: an output can decide access to something essential or cause serious harm, so ${flooredNames.join(', ')} ${flooredNames.length > 1 ? 'are' : 'is'} rated at least Medium`);
+  if (v2) reasons.push(`One cut-off scale for every product: Limited at ${cut.limited}, High at ${cut.high}`);
+  else reasons.push(`Cut-offs from ${cut.from.length ? cut.from.map((f) => FRAMEWORKS[f].name).join(', ') : 'the default policy'}: Limited at ${cut.limited}, High at ${cut.high}`);
+  if (suspended) reasons.push(`Control credit is suspended while: ${signals.filter((x) => x.suspends).map((x) => x.text).join('; ')}. The score stays at ${inherent}/100 (it would be ${declaredResidual}/100) until this is resolved`);
+  else if (!provisional && v2) reasons.push(`Controls bring the score to ${residual}/100 (${TIERS[band(residual, cut)].label} band). Credit is earned principle by principle; overall readiness is ${readiness}%`);
+  else if (!provisional) reasons.push(`Controls in place (${readiness}%) bring the score to ${residual}/100: ${TIERS[band(residual, cut)].label} band`);
   else if (!questions.length) reasons.push('Provisional: controls are assessed at stage 2. Until then the tier rests on the risk profile alone, and it can only come down');
   else reasons.push(`Provisional: the controls declared so far (${readiness}%) would bring the score to ${declaredResidual}/100. They count once the governance team approves stage 2`);
   if (legal.tier !== 'minimal' || profile.prohibited?.length) reasons.push(`Legal floor: ${TIERS[legal.tier].label}. ${legal.reason}`);
@@ -479,8 +537,9 @@ export function scoreAssessment(profile, fws, questions, answers, customCutoffs 
   if (unknownControls.length) reasons.push(`${unknownControls.length} control${unknownControls.length > 1 ? 's are' : ' is'} "Not known" and scored as not in place until confirmed`);
 
   return {
-    principles, inherent, residual, legal, severe, inherentTier, tier, reasons, readiness, cutoffs: cut,
+    principles, inherent, residual, legal, severe, inherentTier, tier, reasons, readiness, cutoffs: cut, scoring: version,
     ...(provisional ? { provisional: true, declaredResidual } : {}),
+    ...(signals.length ? { signals } : {}), ...(suspended ? { creditSuspended: true, declaredResidual } : {}),
     readinessStatus: readinessStatus(readiness), frameworks, pillars,
     dg: { score: frameworks.DG.score, ...maturityLevel(frameworks.DG.score) },
     criticalGaps: answered.filter((x) => x.q.weight === 3 && x.s <= 35).map((x) => x.q.id),

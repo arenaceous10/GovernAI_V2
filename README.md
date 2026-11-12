@@ -79,6 +79,7 @@ beside any other tables in the project; the older tables (`use_cases`, `checklis
 | `009_test_sweep_fixes.sql` | A live product unblocked by a re-assessment returns to production; retired products are frozen for clients; closed stage rounds are not recorded as removals; repeated identical log entries are each recorded. |
 | `010_product_versions.sql` | A version number on each product: a save made over someone else's newer save is refused instead of overwriting it. |
 | `011_operations.sql` | Error reports from people's screens (administrators read them), the `gov_health()` check, and the per-organisation AI switch. |
+| `012_approved_versions_guard.sql` | Only the governance team may write `approvedVersions` (the model versions a go-live or change approval covers). Optional hardening: the app works without it. |
 
 Saving: every change is saved as it happens. A failure shows "Not saved" with Retry in the sidebar. Other people's changes
 appear when the tab regains focus. In Supabase Auth settings, keep email confirmation on and turn on leaked-password protection.

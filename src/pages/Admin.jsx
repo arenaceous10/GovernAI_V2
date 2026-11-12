@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Palette, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
-import { FRAMEWORKS, SELECTABLE_FRAMEWORKS, PRINCIPLES, TIER_CUTOFFS } from '../data/frameworks.js';
+import { FRAMEWORKS, SELECTABLE_FRAMEWORKS, PRINCIPLES, TIER_CUTOFFS, SCALE_CUTOFFS } from '../data/frameworks.js';
 import { QUESTIONS, LEVEL_NAMES } from '../data/questionBank.js';
 import { ROLES, STAGES } from '../data/lifecycle.js';
 import { controlFor } from '../data/controls.js';
@@ -538,18 +538,22 @@ function NumberSetting({ label, min, max, fallback, width, value, onSave }) {
 function CutoffEditor() {
   const { state, setSetting } = useStore();
   const saved = state.settings.cutoffs || {};
-  const keys = [...SELECTABLE_FRAMEWORKS, 'DEFAULT'];
-  const [v, setV] = useState(() => Object.fromEntries(keys.map((k) => [k, { ...(saved[k] || TIER_CUTOFFS[k]) }])));
+  // SCALE is the single scale used by every assessment on the current scoring version. The per-law rows only apply
+  // to assessments made before it, which keep the method they were scored with until they are re-assessed.
+  const keys = ['SCALE', ...SELECTABLE_FRAMEWORKS, 'DEFAULT'];
+  const DEFAULTS = { ...TIER_CUTOFFS, SCALE: SCALE_CUTOFFS };
+  const label = (k) => (k === 'SCALE' ? 'Every product (current scoring)' : `${k === 'DEFAULT' ? 'No framework' : FRAMEWORKS[k].name} (earlier assessments only)`);
+  const [v, setV] = useState(() => Object.fromEntries(keys.map((k) => [k, { ...(saved[k] || DEFAULTS[k]) }])));
   const ok = keys.every((k) => v[k].limited > 0 && v[k].limited < v[k].high && v[k].high <= 100);
   const set = (k, f, x) => setV({ ...v, [k]: { ...v[k], [f]: Number(x) } });
   return (
-    <Panel title="Tier cut-offs" sub="Applied to new assessments and re-assessments.">
+    <Panel title="Tier cut-offs" sub="One scale now applies to every product, whatever laws are in scope; the laws set legal floors instead. Products assessed before this keep their per-law cut-offs until they are re-assessed.">
       <table className="table">
-        <thead><tr><th>Framework</th><th>Limited from</th><th>High from</th></tr></thead>
+        <thead><tr><th>Applies to</th><th>Limited from</th><th>High from</th></tr></thead>
         <tbody>
           {keys.map((k) => (
             <tr key={k}>
-              <td className="small">{k === 'DEFAULT' ? 'No framework' : FRAMEWORKS[k].name}</td>
+              <td className="small">{k === 'SCALE' ? <b>{label(k)}</b> : <span className="mute">{label(k)}</span>}</td>
               {['limited', 'high'].map((f) => <td key={f}><input className="input" type="number" min="1" max="100" aria-label={`${k} ${f}`} style={{ width: 80, padding: '5px 8px' }} value={v[k][f]} onChange={(e) => set(k, f, e.target.value)} /></td>)}
             </tr>
           ))}
@@ -558,7 +562,7 @@ function CutoffEditor() {
       {!ok && <p className="xs tone-bad" style={{ marginTop: 6 }}>Limited must be above 0 and below High; High at most 100.</p>}
       <div className="row" style={{ marginTop: 10 }}>
         <button className="btn primary sm" disabled={!ok} onClick={() => setSetting('cutoffs', v)}>Save cut-offs</button>
-        <button className="btn ghost sm" onClick={() => { const d = Object.fromEntries(keys.map((k) => [k, { ...TIER_CUTOFFS[k] }])); setV(d); setSetting('cutoffs', {}); }}>Restore defaults</button>
+        <button className="btn ghost sm" onClick={() => { const d = Object.fromEntries(keys.map((k) => [k, { ...DEFAULTS[k] }])); setV(d); setSetting('cutoffs', {}); }}>Restore defaults</button>
       </div>
     </Panel>
   );

@@ -14,4 +14,5 @@ export async function mount() {
 }
 export { emptyProfile, buildQuestionnaire, scoreAssessment, buildActions, UNKNOWN, FLOW, rescore, controlGaps, evidenceNeed, evidenceMet, effectiveAnswers, isProvisional, isStaged, refreshQuestions } from '../../src/engine/engine.js';
 export { PROFILE_QUESTIONS, PROHIBITED, SELECTABLE_FRAMEWORKS } from '../../src/data/frameworks.js';
+export { breachSignals, goLiveBlockers } from '../../src/engine/governance.js';
 export { act, stageBlockers, waitingOn, canWithdraw, purgeEligible, visibleSystems, STAGES, requiredApprovals, isMandatory, SKIP_REASONS, WITHDRAW_REASONS };

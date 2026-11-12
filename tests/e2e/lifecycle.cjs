@@ -43,7 +43,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   // reviewer: read-only on an open stage
   await role('assessor'); await p.goto(URL + '#products'); await W(); await p.getByText('Motor claims triage model').first().click(); await W(300);
   assert(await p.locator('main input[type=checkbox]').count() === 0, 'reviewer cannot tick');
-  assert(await p.getByRole('button', { name: 'Attach' }).count() === 0 && await p.getByRole('button', { name: /Submit/ }).count() === 0 && await btn('Tick all').count() === 0, 'reviewer cannot attach or submit');
+  assert(await p.getByRole('button', { name: 'Attach' }).count() === 0 && await p.getByRole('button', { name: /Submit/ }).count() === 0 && await p.getByRole('button', { name: /Tick the \d+ optional checks/ }).count() === 0 && await p.locator('.check-item input[type=checkbox]').count() === 0, 'reviewer cannot attach, tick or submit');
   assert((await body()).includes('The client is working on this stage'), 'reviewer told client is working');
   assert(await p.locator('.check-item').count() > 0, 'read-only checklist');
   t = await body(); assert(/Review workspace/.test(await (async () => { await p.goto(URL + '#dashboard'); await W(); return body(); })()), 'reviewer home');
@@ -82,9 +82,14 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   // stage helper
   const openLife = async () => { await p.goto(URL + '#product--' + pid); await W(250); await tab('Lifecycle'); };
   const stageNo = async () => +(await p.locator('.hero-stage .stage-chip').innerText());
+  // Mandatory checks are ticked one by one; the bulk button only covers the optional ones.
+  const tickAll = async () => {
+    const bulk = p.getByRole('button', { name: /Tick the \d+ optional checks/ }); if (await bulk.count()) { await bulk.click(); await W(); }
+    for (let guard = 0; guard < 40; guard++) { const box = p.locator('.check-item input[type=checkbox]:not(:checked)').first(); if (!(await box.count())) break; await box.check(); }
+  };
   const clientSubmit = async () => {
     await role('client:northwind'); await openLife();
-    const ta = btn('Tick all'); if (await ta.count()) await ta.click();
+    await tickAll();
     await p.getByRole('button', { name: /Submit (for review|periodic review)/ }).click(); await W();
   };
   const approve = async (r) => { await role(r); await openLife(); const a = btn('Approve'); if (await a.count()) { await a.click(); await W(); return true; } return false; };
@@ -104,7 +109,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   // stage 2 (gate, High): the control assessment comes first
   await role('client:northwind'); await openLife(); t = await body();
   assert(/Control assessment not started/.test(t) && (await p.locator('.product-hero').innerText()).includes('Provisional'), 'stage 2 asks for the control assessment; tier provisional');
-  const ta2 = btn('Tick all'); if (await ta2.count()) await ta2.click();
+  await tickAll();
   assert(await p.getByRole('button', { name: 'Submit for review' }).isDisabled(), 'stage 2 cannot be submitted without the control assessment');
   await btn('Start').click(); await W(1500);
   t = await body(); assert(/Control assessment/.test(t) && (await p.locator('.ladder').count()) > 0, 'control questions shown');
@@ -154,6 +159,10 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
   await role('lead'); await openLife(); await p.getByLabel('Override reason').fill('Design review held offline, minutes to follow'); await btn('Override').click(); await W(); assert(await stageNo() === 5, 'override to 5');
   // stage 5 and 6 (gates, High)
   await clientSubmit(); await approve('assessor'); await approve('lead'); assert(await stageNo() === 6, 'stage 6');
+  // the override at stage 4 left a follow-up: go-live cannot be submitted until the client closes it
+  await role('client:northwind'); await openLife(); await tickAll();
+  assert(/override follow-up.* still open/.test(await body()) && await p.getByRole('button', { name: /Submit for review/ }).isDisabled(), 'go-live blocked by the open override follow-up');
+  await tab('Actions'); await p.getByLabel('Status of Override follow-up (stage 4)').selectOption('Done'); await W();
   await clientSubmit(); await approve('assessor'); await role('lead'); await openLife();
   await p.getByLabel('Comment to the client').fill('Monthly fairness report for six months'); await btn('Approve with conditions').click(); await W();
   assert(await stageNo() === 7, 'in production'); assert((await body()).includes('In production'), 'status production'); await S('15-production');

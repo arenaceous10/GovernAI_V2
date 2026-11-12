@@ -10,9 +10,10 @@ import { fwName } from '../components/Results.jsx';
 import { toast } from '../components/Extras.jsx';
 import { useStore, CAN } from '../store/store.jsx';
 import { EvidenceItem } from './Product.jsx';
+import { consistencyFlags, evidenceReuse } from '../engine/governance.js';
 
 const NEED_TEXT = {
-  proof: 'Evidence needed: upload a file or give a link.',
+  proof: 'Evidence needed: upload a file, or give a web link (https://…). You can add a few words before or after the link.',
   reference: 'Reference needed: say where this is documented or who owns it. A file is optional.',
 };
 
@@ -122,6 +123,10 @@ export default function ControlAssessment({ id, nav }) {
   const sectionGaps = (qs) => qs.filter((q) => gaps.unansweredIds.includes(q.id) || gaps.unsupportedIds.includes(q.id)).length;
   const idx = sections.findIndex((x) => x.k === current);
   const lowered = Object.entries(a.review || {}).filter(([k, r]) => typeof a.answers?.[k] === 'number' && r.rating < a.answers[k]).length;
+  // For the reviewer: answers that contradict the risk profile, and evidence reused across many controls.
+  const flags = canRate ? consistencyFlags(a.profile, a.frameworks, questions, a.answers || {}) : [];
+  const reuse = canRate ? evidenceReuse(a.evidence) : [];
+  const topicOf = (id) => questions.find((q) => q.id === id)?.topic || id;
 
   const setAnswer = (q, v) => { setAnswers((x) => ({ ...x, [q.id]: v })); setDirty(true); };
   const setEv = (q, v) => {
@@ -141,6 +146,13 @@ export default function ControlAssessment({ id, nav }) {
       </div>
 
       {isProvisional(a) && <div className="callout small" style={{ marginBottom: 14 }}>The tier is provisional: it rests on the risk profile alone until the governance team approves stage 2. Controls can only bring it down.</div>}
+      {flags.length > 0 && (
+        <div className="callout warn small" style={{ marginBottom: 14 }}><b>{flags.length} answer{flags.length > 1 ? 's do' : ' does'} not fit the risk profile.</b> Check these before you approve; lower the rating or return the stage if the answer cannot be supported.
+          <ul className="list-plain" style={{ marginTop: 6 }}>{flags.map((f) => <li key={f.id}>{f.text} <span className="mute">({f.qids.map(topicOf).join(', ')})</span></li>)}</ul></div>
+      )}
+      {reuse.length > 0 && (
+        <div className="callout warn small" style={{ marginBottom: 14 }}><b>The same evidence backs several controls.</b> {reuse.map((g) => `"${g.label}" is used for ${g.count} controls (${g.items.map(topicOf).slice(0, 4).join(', ')}${g.items.length > 4 ? '…' : ''})`).join('; ')}. Check that it really covers each one.</div>
+      )}
       {withTeam && CAN.work(role) && <div className="callout small" style={{ marginBottom: 14 }}><b>With the governance team.</b> Stage 2 is submitted, so the answers are locked until they decide.</div>}
       {!canEdit && !questions.length && <Panel><div className="empty"><p>The client has not started the control assessment yet.</p></div></Panel>}
       {building && <Panel><div className="empty"><Loader2 className="spin" size={22} /><p>Preparing questions for this product…</p></div></Panel>}

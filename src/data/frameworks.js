@@ -229,7 +229,7 @@ export const PROFILE_QUESTIONS = [
 // Derived items, also 1 to 3, shown on the How scoring works page.
 export const DERIVED_ITEMS = [
   { id: 'data', principle: 'privacy', label: 'Most sensitive data category chosen in step 1' },
-  { id: 'technical', principle: 'robustness', label: 'Type of AI (rules 1, ML 2, generative or agent 3)' },
+  { id: 'technical', principle: 'robustness', label: 'Type of AI (rules 1, ML 2, generative or agent 3), one step lower when a person makes every decision and one step higher when outputs take effect without review; agents and biometric identification stay at 3' },
   { id: 'dependency', principle: 'accountability', label: 'Sourcing (in-house 1, vendor 2, foundation model 3)' },
 ];
 
@@ -260,11 +260,24 @@ export const ANNEX_III = [
   { id: 'infrastructure', label: 'Safety component of critical infrastructure (energy, water, traffic, digital)' },
   { id: 'education', label: 'Education: admission, assessment, proctoring' },
   { id: 'employment', label: 'Employment: recruitment, promotion, termination, task allocation, monitoring' },
-  { id: 'essential', label: 'Essential services: credit scoring, life and health insurance pricing, public benefits, emergency dispatch' },
+  { id: 'essential', label: 'Essential services: credit scoring, life and health insurance pricing, public benefits, emergency call dispatch and emergency healthcare patient triage' },
   { id: 'law', label: 'Law enforcement' },
   { id: 'migration', label: 'Migration, asylum and border control' },
   { id: 'justice', label: 'Administration of justice or democratic processes' },
 ];
+
+// EU AI Act role (Art. 3(3)-(4)). The provider develops the system or has it developed and places it on the market
+// or puts it into service under its own name; the deployer uses it under its authority. An organisation that builds
+// a system for its own use is both. When the role is not stated it follows the sourcing.
+export const EU_ROLES = [
+  { id: 'provider', label: 'Provider', hint: 'We develop it, or have it developed, and supply it to others under our name' },
+  { id: 'deployer', label: 'Deployer', hint: 'We use a system that another organisation provides' },
+  { id: 'both', label: 'Provider and deployer', hint: 'We develop it and use it ourselves' },
+];
+export function euRoles(profile = {}) {
+  const r = EU_ROLES.some((x) => x.id === profile.euRole) ? profile.euRole : (profile.sourcing === 'vendor' ? 'deployer' : 'both');
+  return { id: r, stated: r === profile.euRole, provider: r !== 'deployer', deployer: r !== 'provider', label: EU_ROLES.find((x) => x.id === r).label };
+}
 
 // EU AI Act Art. 50 transparency triggers.
 export const TRANSPARENCY = [
@@ -277,7 +290,7 @@ export const TRANSPARENCY = [
 export const TIERS = {
   minimal: { label: 'Minimal', rank: 0, color: '#2F7D4F', bg: '#E8F3EC', review: 24, meaning: 'Reviewer sign-off at each stage. Periodic review every 24 months.' },
   limited: { label: 'Limited', rank: 1, color: '#A86A12', bg: '#FBF1DF', review: 12, meaning: 'Transparency duties apply. Periodic review every 12 months.' },
-  high: { label: 'High', rank: 2, color: '#B83A2E', bg: '#FBE7E4', review: 6, meaning: 'Governance lead also signs stages 2, 5 and 6. Periodic review every 6 months.' },
+  high: { label: 'High', rank: 2, color: '#B83A2E', bg: '#FBE7E4', review: 6, meaning: 'Governance lead also signs stages 2, 5, 6 and every change (stage 8). Periodic review every 6 months.' },
   unacceptable: { label: 'Unacceptable', rank: 3, color: '#3B2350', bg: '#ECE6F2', review: 0, meaning: 'Prohibited practice. Cannot proceed; escalate to legal.' },
 };
 export const TIER_ORDER = ['minimal', 'limited', 'high', 'unacceptable'];
@@ -295,7 +308,16 @@ export function suggestFrameworks(geos = []) {
   return [...out];
 }
 
-// Tier cut-offs on the common 0-100 score, set per framework. When several apply, the strictest (lowest) wins.
+// Scoring version 2: one cut-off scale for every product, whatever laws are in scope. The laws set legal floors
+// (see legalClass) and are reported one by one (see legalByLaw); they no longer move the score band. An
+// administrator can change the scale (settings.cutoffs.SCALE).
+export const SCALE_CUTOFFS = { limited: 40, high: 65 };
+export function scaleFor(custom = {}) {
+  const c = custom?.SCALE;
+  return validCut(c) ? { limited: +c.limited, high: +c.high, from: [] } : { ...SCALE_CUTOFFS, from: [] };
+}
+
+// Scoring version 1 (assessments made before the single scale): tier cut-offs on the common 0-100 score, set per framework. When several apply, the strictest (lowest) wins.
 // EU AI Act is a risk-tier law with fines up to 7% of turnover, so it escalates earliest; GDPR's "likely high risk"
 // DPIA test sits in the middle; the DPDP Act has fewer AI-specific duties, so it escalates last.
 export const TIER_CUTOFFS = {
@@ -305,7 +327,7 @@ export const TIER_CUTOFFS = {
   DEFAULT: { limited: 35, high: 60 },
 };
 // Saved cut-offs are checked again here: a malformed entry (outside 1-100, or Limited not below High) falls back to the default.
-const validCut = (c) => c && Number.isFinite(+c.limited) && Number.isFinite(+c.high) && +c.limited > 0 && +c.limited < +c.high && +c.high <= 100;
+function validCut(c) { return !!c && Number.isFinite(+c.limited) && Number.isFinite(+c.high) && +c.limited > 0 && +c.limited < +c.high && +c.high <= 100; }
 export function cutoffsFor(fws = [], custom = {}) {
   const ok = Object.fromEntries(Object.entries(custom || {}).filter(([, c]) => validCut(c)).map(([k, c]) => [k, { limited: +c.limited, high: +c.high }]));
   const table = { ...TIER_CUTOFFS, ...ok };

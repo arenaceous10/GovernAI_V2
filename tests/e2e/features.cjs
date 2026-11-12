@@ -45,7 +45,11 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
     assert(rec.skipped['Third-party dependencies and update behavior are controlled.']?.due === d, 'skip saved to the database');
     assert(row('sys-1').actions.some((a) => a.source === 'checklist' && a.item.startsWith('Third-party')), 'skip raised an action');
     assert(await p.locator('.check-item.open', { hasText: 'Access follows least privilege' }).getByRole('button', { name: /^Skip with a reason/ }).count() === 0, 'mandatory item has no skip');
-    await p.getByRole('button', { name: 'Tick all' }).click(); await W(500);
+    // the bulk button ticks the optional checks only; each mandatory check is ticked on its own
+    const bulk = p.getByRole('button', { name: /Tick the \d+ optional checks/ }); if (await bulk.count()) { await bulk.click(); await W(300); }
+    assert(await p.locator('.check-item input[type=checkbox]:not(:checked)').count() > 0, 'mandatory checks are left for the client to tick one by one');
+    for (let guard = 0; guard < 40; guard++) { const box = p.locator('.check-item input[type=checkbox]:not(:checked)').first(); if (!(await box.count())) break; await box.check(); }
+    await W(500);
     assert(!(await p.getByRole('button', { name: /Submit for review/ }).isDisabled()), 'submit allowed with every check ticked or skipped');
     assert(row('sys-1').stages['4'].skipped['Third-party dependencies and update behavior are controlled.'], 'tick all keeps skips');
     await p.getByRole('button', { name: /Submit for review/ }).click(); await W(700);

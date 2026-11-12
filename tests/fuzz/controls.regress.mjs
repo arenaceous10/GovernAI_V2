@@ -23,9 +23,13 @@ const registerStaged = async (level, fws = ['DPDP']) => {
   const base = { at: new Date().toISOString(), by: 'client', profile: profileOf(level), frameworks: fws, questions: [], answers: {}, flow: H.FLOW, questionSource: '' };
   return run(() => api().register(null, { name: `Staged ${level}`, bu: '', owner: 'Owner', description: base.profile.description }, { ...base, results: H.rescore(base) }, []));
 };
+const tickEvery = async (id, n) => {   // mandatory checks are ticked one by one
+  await run(() => api().checkAll(id, n, H.STAGES[n - 1].checklist));
+  for (const i of H.STAGES[n - 1].checklist) { const rec = sys(id).stages?.[n]; if (!rec?.checklist?.[i] && !rec?.skipped?.[i]) await run(() => api().toggleCheck(id, n, i)); }
+};
 const passStage = async (id, n) => {
   await as('client', org);
-  await run(() => api().checkAll(id, n, H.STAGES[n - 1].checklist));
+  await tickEvery(id, n);
   await run(() => api().submitStage(id, n, 'Ready.'));
   for (const r of H.waitingOn(sys(id))) { await as(r); await run(() => api().reviewStage(id, n, r, 'Approved', 'ok')); }
 };
@@ -60,7 +64,7 @@ await check('stage 1 passes without controls; stage 2 cannot be submitted until 
   await passStage(id, 1);
   assert.equal(sys(id).stage, 2);
   await as('client', org);
-  await run(() => api().checkAll(id, 2, H.STAGES[1].checklist));
+  await tickEvery(id, 2);
   assert.ok(H.stageBlockers(sys(id)).some((b) => /Control assessment not started/.test(b)));
   await run(() => api().submitStage(id, 2, 'Trying early.'));
   assert.equal(sys(id).stages[2].status, 'open');

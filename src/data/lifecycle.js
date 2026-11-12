@@ -95,8 +95,9 @@ export const STAGES = [
 ];
 export const stageOf = (n) => STAGES[(n || 1) - 1];
 
-// Gates where a high-risk product also needs the governance lead.
-export const GATE_STAGES = [2, 5, 6];
+// Gates where a high-risk product also needs the governance lead: the impact assessment, validation, go-live, and
+// every change to a system already in production (a change can alter the approved risk as much as the first release).
+export const GATE_STAGES = [2, 5, 6, 8];
 export function requiredApprovals(stage, tier) {
   if (tier === 'unacceptable') return [];
   if (tier === 'high' && GATE_STAGES.includes(stage)) return ['assessor', 'lead'];

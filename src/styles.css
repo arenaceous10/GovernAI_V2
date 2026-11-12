@@ -1130,3 +1130,7 @@ h1, h2, h3 { text-wrap: balance; }
 .health-list li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line-2); }
 .error-list li { padding: 8px 0; border-top: 1px solid var(--line-2); }
 .error-list pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; padding: 8px; background: var(--paper); border-radius: 6px; max-height: 160px; overflow: auto; }
+
+/* Registry confirmation beside a checklist item */
+.ci-tag.reg-ok { background: var(--good-bg); color: var(--good-ink); border-color: #B7DEC4; }
+.ci-tag.reg-no { background: #FBF1DF; color: #7A4B08; border-color: #EBD3A4; }

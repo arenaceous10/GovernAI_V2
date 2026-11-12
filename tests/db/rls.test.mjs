@@ -24,7 +24,7 @@ const U = { a: '00000000-0000-0000-0000-00000000000a', b: '00000000-0000-0000-00
 async function setup() {
   const db = new PGlite();
   await db.exec(PRELUDE);
-  for (const f of ['001_governai_v2.sql', '002_evidence_files.sql', '003_auth_rbac.sql', '004_ai_usage.sql', '005_security_fixes.sql', '006_function_privileges.sql', '007_ledger_and_ops.sql', '008_withdrawal_guard.sql', '009_test_sweep_fixes.sql', '010_product_versions.sql', '011_operations.sql']) await db.exec(MIG(f));
+  for (const f of ['001_governai_v2.sql', '002_evidence_files.sql', '003_auth_rbac.sql', '004_ai_usage.sql', '005_security_fixes.sql', '006_function_privileges.sql', '007_ledger_and_ops.sql', '008_withdrawal_guard.sql', '009_test_sweep_fixes.sql', '010_product_versions.sql', '011_operations.sql', '012_approved_versions_guard.sql']) await db.exec(MIG(f));
   await db.exec(`grant select, insert, update, delete on all tables in schema public to anon, authenticated;
     revoke insert, update, delete on public.v2_ai_usage from anon, authenticated;
     revoke insert, update, delete on public.v2_ledger from anon, authenticated;`);
@@ -388,4 +388,27 @@ test('twenty people saving the same version at once: exactly one save wins', asy
   assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
   assert.ok(results.filter((r) => r.status === 'rejected').every((r) => /Someone else changed/.test(r.reason.message)));
   assert.equal(Number((await db.query(`select rev from public.v2_products where id = 'race'`)).rows[0].rev), 1);
+});
+
+test('approved model versions: an incident with its re-scored assessment saves in one go; only the governance team records which versions are approved', async () => {
+  const { db, orgA } = await setup();
+  const live = product('pv', orgA, { status: 'In production', stage: 7, stages: { 6: stage({ status: 'approved', approvals: { lead: { outcome: 'Approved' } } }), 7: stage() },
+    assessment: { scoring: 2, results: { tier: 'limited', residual: 30 } }, approvedVersions: [{ version: '1', stage: 6 }] });
+  await upsert(db, U.lead, live);
+  // the client raises an incident: stage 9 opens and the score is settled in the same save (control credit suspended)
+  await upsert(db, U.a, { ...live, stage: 9, stages: { ...live.stages, 9: stage() }, events: [{ kind: 'incident', severity: 'serious', personalData: true }],
+    assessment: { scoring: 2, results: { tier: 'high', residual: 45, creditSuspended: true } }, history: [{ tier: 'high' }] });
+  const now = await read(db, 'pv');
+  assert.equal(now.stage, 9); assert.equal(now.assessment.results.creditSuspended, true);
+  // a client cannot mark a model version as approved, change the list or drop it
+  await fails(upsert(db, U.a, { ...now, approvedVersions: [...now.approvedVersions, { version: '2', stage: 8 }] }), /approved model versions/);
+  await fails(upsert(db, U.a, { ...now, approvedVersions: [] }), /approved model versions/);
+  const { approvedVersions, ...without } = now;
+  await fails(upsert(db, U.a, without), /approved model versions/);
+  await fails(upsert(db, U.a, product('pnew', orgA, { approvedVersions: [{ version: '9', stage: 6 }] })), /approved model versions/);
+  // unchanged list: ordinary client work still saves; the governance team may record a version
+  await upsert(db, U.a, { ...now, actions: [{ id: 'a1', status: 'Done' }] });
+  await upsert(db, U.rev, { ...(await read(db, 'pv')), approvedVersions: [...approvedVersions, { version: '2', stage: 8 }] });
+  assert.equal((await read(db, 'pv')).approvedVersions.length, 2);
+  await upsert(db, U.a, product('pok', orgA));   // a new product without the list is fine
 });

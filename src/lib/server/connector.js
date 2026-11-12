@@ -239,6 +239,32 @@ async function sql(fetchImpl, base, token, warehouseId, statement, parameters = 
 const parseMaybe = (v) => { if (typeof v !== 'string') return v; try { return JSON.parse(v); } catch { return v; } };
 const pick = (v, keys) => { const o = parseMaybe(v); if (o && typeof o === 'object') { for (const k of keys) if (num(o[k]) != null) return num(o[k]); return null; } return num(o); };
 
+// Classification metrics come as { one_vs_all: { label: value }, macro, weighted }. For a two-class model the figure
+// that matters is the positive class (how many true cases are caught), which a weighted average hides when the
+// positive class is rare. Returns the positive label for a two-class model, or null.
+const POSITIVE = ['1', '1.0', 'true', 'yes', 'positive', 'pos'];
+function positiveLabel(v) {
+  const o = parseMaybe(v); const ova = parseMaybe(o?.one_vs_all);
+  if (!ova || typeof ova !== 'object') return null;
+  const keys = Object.keys(ova);
+  if (keys.length !== 2) return null;
+  const named = keys.find((k) => POSITIVE.includes(String(k).toLowerCase()));
+  if (named != null) return named;
+  return keys.every((k) => num(k) != null) ? keys.sort((a, b) => +a - +b)[1] : null;
+}
+const ovaOf = (v, label) => { const o = parseMaybe(v); const ova = parseMaybe(o?.one_vs_all); return label != null && ova && typeof ova === 'object' ? num(ova[label]) : null; };
+function perfOf(r, label) {
+  const perf = {};
+  for (const k of ['accuracy_score', 'roc_auc', 'log_loss', 'mean_squared_error', 'root_mean_squared_error', 'mean_absolute_error', 'r2_score']) if (num(r[k]) != null) perf[k] = num(r[k]);
+  for (const k of ['precision', 'recall', 'f1_score']) {
+    const v = pick(r[k], ['weighted', 'macro']); if (v != null) perf[k] = v;
+    const p = ovaOf(r[k], label); if (p != null) perf[`${k === 'f1_score' ? 'f1' : k}_positive`] = p;
+  }
+  return perf;
+}
+// Columns that are not model inputs: identifiers always "drift" because every window holds new values.
+const ID_LIKE = /(^|_)(id|uuid|guid)$/i;
+
 // ---------- Production monitoring (Databricks data profiling, formerly Lakehouse Monitoring) ----------
 async function tableInfo(fetchImpl, base, token, name) {
   return getJson(fetchImpl, `${base}/api/2.1/unity-catalog/tables/${encodeURIComponent(name)}`, token, { notFound: `Table ${name} was not found, or the token cannot read it` });
@@ -272,7 +298,7 @@ export async function readMonitoring({ base, token, table, warehouseId }, { fetc
   const driftQ = validTable(out.monitor.driftTable)
     ? sql(fetchImpl, base, token, warehouseId, `SELECT * FROM ${quote(out.monitor.driftTable)} WHERE column_name <> ':table' ORDER BY window.end DESC LIMIT 300`) : null;
   const profQ = validTable(out.monitor.profileTable)
-    ? sql(fetchImpl, base, token, warehouseId, `SELECT * FROM ${quote(out.monitor.profileTable)} WHERE column_name = ':table' ORDER BY window.end DESC LIMIT 20`) : null;
+    ? sql(fetchImpl, base, token, warehouseId, `SELECT * FROM ${quote(out.monitor.profileTable)} WHERE column_name = ':table' ORDER BY window.end DESC LIMIT 200`) : null;
   const [dr, pr] = await Promise.allSettled([driftQ, profQ]);
   if (driftQ && dr.status === 'fulfilled') {
     const rows = dr.value;
@@ -288,23 +314,38 @@ export async function readMonitoring({ base, token, table, warehouseId }, { fetc
     const tsCol = m.inference_log?.timestamp_col || m.time_series?.timestamp_col || m.inference_log?.timestamp_column || m.time_series?.timestamp_column || '';
     const seenCol = new Set();
     cur = cur.filter((r) => r.column_name !== tsCol && r.column_name !== ':table' && !seenCol.has(`${r.column_name}|${r.drift_type}`) && seenCol.add(`${r.column_name}|${r.drift_type}`));
+    // The label, the model id and identifier columns are not inputs to the model, so their "drift" says nothing
+    // about it. They are left out and listed, so nobody wonders where they went.
+    const il = m.inference_log || {};
+    const notInputs = new Set([il.label_col, il.label_column, il.model_id_col, il.model_id_column].filter(Boolean));
+    const skip = (c) => notInputs.has(c) || ID_LIKE.test(String(c));
+    const skipped = [...new Set(cur.filter((r) => skip(r.column_name)).map((r) => String(r.column_name).slice(0, 120)))];
+    cur = cur.filter((r) => !skip(r.column_name));
     const cols = cur.map((r) => ({
       column: String(r.column_name).slice(0, 120), type: String(r.drift_type || '').slice(0, 20),
       js: num(r.js_distance), psi: num(r.population_stability_index), ksP: pick(r.ks_test, ['pvalue', 'p_value']),
     }));
     const drifted = cols.filter((c) => (c.js != null && c.js > DRIFT.js) || (c.psi != null && c.psi > DRIFT.psi) || (c.ksP != null && c.ksP < DRIFT.ksP));
     // A column that drifted against both the previous window and the baseline is listed once.
-    const once = [...new Map(drifted.map((c) => [c.column, c])).values()];
-    out.drift = { windowEnd: latest, checked: new Set(cols.map((c) => c.column)).size, drifted: once.slice(0, 15) };
+    // Worst first: by Jensen-Shannon distance, then population stability index.
+    const once = [...new Map(drifted.map((c) => [c.column, c])).values()].sort((a, b) => (b.js ?? -1) - (a.js ?? -1) || (b.psi ?? -1) - (a.psi ?? -1));
+    out.drift = { windowEnd: latest, checked: new Set(cols.map((c) => c.column)).size, drifted: once.slice(0, 15), skipped: skipped.slice(0, 15) };
   } else if (driftQ) out.notes.push(`Drift metrics: ${dr.reason?.message || 'not readable'}`);
   if (profQ && pr.status === 'fulfilled') {
     const rows = pr.value;
     const r = rows.find((x) => (!x.slice_key || x.slice_key === 'null') && (x.model_id == null || x.model_id === '*')) || rows.find((x) => !x.slice_key || x.slice_key === 'null') || rows[0];
     if (r) {
-      const perf = {};
-      for (const k of ['accuracy_score', 'roc_auc', 'log_loss', 'mean_squared_error', 'root_mean_squared_error', 'mean_absolute_error', 'r2_score']) if (num(r[k]) != null) perf[k] = num(r[k]);
-      for (const k of ['precision', 'recall', 'f1_score']) { const v = pick(r[k], ['weighted', 'macro']); if (v != null) perf[k] = v; }
-      out.performance = { windowEnd: (parseMaybe(r.window) || {}).end || null, rows: num(r.count), metrics: perf };
+      const endOf = (x) => (parseMaybe(x.window) || {}).end || null;
+      const label = positiveLabel(r.recall) ?? positiveLabel(r.precision) ?? positiveLabel(r.f1_score);
+      out.performance = { windowEnd: endOf(r), rows: num(r.count), metrics: perfOf(r, label), ...(label != null ? { positiveLabel: String(label).slice(0, 40) } : {}) };
+      // The same window split by the monitor's slicing expressions (for example sex or age band), so a group the
+      // model serves badly is not hidden by the overall figure.
+      const slices = rows.filter((x) => x.slice_key && x.slice_key !== 'null' && endOf(x) === out.performance.windowEnd && (x.model_id == null || x.model_id === r.model_id))
+        .map((x) => ({ key: String(x.slice_key).slice(0, 80), value: String(x.slice_value ?? '').slice(0, 80), rows: num(x.count), metrics: perfOf(x, label) }))
+        .filter((x) => Object.keys(x.metrics).length);
+      const seen = new Set();
+      const uniq = slices.filter((x) => !seen.has(`${x.key}|${x.value}`) && seen.add(`${x.key}|${x.value}`)).sort((a, b) => a.key.localeCompare(b.key) || a.value.localeCompare(b.value));
+      if (uniq.length) out.performance.slices = uniq.slice(0, 40);
     }
   } else if (profQ) out.notes.push(`Profile metrics: ${pr.reason?.message || 'not readable'}`);
   return out;

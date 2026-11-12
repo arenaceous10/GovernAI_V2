@@ -1,6 +1,7 @@
 import { Legend, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip } from 'recharts';
-import { PILLARS, PRINCIPLES, PRINCIPLE_IDS, TIERS } from '../data/frameworks.js';
-import { riskLabel, sectionName, sectionOrder, readinessStatus } from '../engine/engine.js';
+import { PILLARS, PRINCIPLES, PRINCIPLE_IDS, TIERS, FRAMEWORKS } from '../data/frameworks.js';
+import { riskLabel, sectionName, sectionOrder, readinessStatus, tierBand } from '../engine/engine.js';
+import { legalByLaw } from '../engine/governance.js';
 import { Bar, Panel, Pill, RiskScale, toneColor } from './ui.jsx';
 
 export const fwName = sectionName;
@@ -62,9 +63,10 @@ export function PrincipleRadar({ principles, height = 280 }) {
 }
 
 export function PrincipleTable({ principles }) {
+  const v2 = PRINCIPLE_IDS.some((p) => principles[p]?.credit != null);
   return (
     <table className="table">
-      <thead><tr><th>Principle</th><th>Risk</th><th style={{ width: 160 }}>Controls in place</th></tr></thead>
+      <thead><tr><th>Principle</th><th>Risk</th><th style={{ width: 160 }}>Controls in place</th>{v2 && <th>Credit towards the score</th>}</tr></thead>
       <tbody>
         {PRINCIPLE_IDS.map((p) => {
           const x = principles[p]; const st = readinessStatus(x.readiness);
@@ -73,6 +75,7 @@ export function PrincipleTable({ principles }) {
               <td>{PRINCIPLES[p].name}</td>
               <td><Pill tone={{ High: 'bad', Medium: 'warn', Low: 'good' }[riskLabel(x.risk)]}>{riskLabel(x.risk)}</Pill></td>
               <td><div className="spread small"><span className="num">{x.readiness ?? '—'}%</span></div><Bar value={x.readiness} color={toneColor(st.tone)} /></td>
+              {v2 && <td className="small">{x.creditNote ? <span className="mute">{x.creditNote}</span> : <span className="num">{x.credit}%</span>}{x.floored ? <div className="xs mute">Risk held at Medium by the stakes floor</div> : null}</td>}
             </tr>
           );
         })}
@@ -81,9 +84,41 @@ export function PrincipleTable({ principles }) {
   );
 }
 
-export default function Results({ results, frameworks }) {
+// The legal position, one law at a time. Kept apart from the governance tier so "High" (the tier) is never confused
+// with "high-risk" (an EU AI Act category), and so GDPR and DPDP duties are visible even though they set no tier.
+const DPIA_TEXT = { required: 'DPIA required', screen: 'DPIA screening needed', none: 'No DPIA trigger found', na: 'Not applicable: no personal data' };
+export function LegalPosition({ profile, frameworks }) {
+  const l = legalByLaw(profile, frameworks);
+  if (!Object.keys(l).length) return null;
+  return (
+    <Panel title="Legal position, law by law" sub="Indicative, from the risk profile. It shows which duties to confirm with legal and privacy; it is not legal advice.">
+      <div className="grid g3">
+        {l.EU_AI_ACT && (
+          <div><div className="small" style={{ fontWeight: 600 }}>{FRAMEWORKS.EU_AI_ACT.name}</div>
+            <div className="row" style={{ gap: 6, margin: '6px 0' }}><Pill tone={{ unacceptable: 'bad', high: 'bad', limited: 'warn', minimal: 'good' }[l.EU_AI_ACT.tier]}>{l.EU_AI_ACT.category}</Pill><Pill tone="mute">{l.EU_AI_ACT.role}</Pill></div>
+            <p className="small mute">{l.EU_AI_ACT.reason}.{l.EU_AI_ACT.derogation ? ' Keep the documented Art. 6(3) assessment and give it to the authority on request.' : ''}{!l.EU_AI_ACT.roleStated ? ' The role is assumed from how the system is sourced: confirm it when you re-assess.' : ''}</p></div>
+        )}
+        {l.GDPR && (
+          <div><div className="small" style={{ fontWeight: 600 }}>{FRAMEWORKS.GDPR.name}</div>
+            <div className="row" style={{ gap: 6, margin: '6px 0', flexWrap: 'wrap' }}><Pill tone={{ required: 'bad', screen: 'warn', none: 'good', na: 'mute' }[l.GDPR.dpia]}>{DPIA_TEXT[l.GDPR.dpia]}</Pill>{l.GDPR.art22 && <Pill tone="bad">Art. 22 applies</Pill>}{l.GDPR.special && <Pill tone="warn">Art. 9 condition needed</Pill>}</div>
+            <p className="small mute">{l.GDPR.criteria.length ? `Art. 35 indicators: ${l.GDPR.criteria.join(', ')}.` : l.GDPR.applies ? 'None of the usual Art. 35 indicators apply.' : 'The risk profile lists no personal data.'}{l.GDPR.art22 ? ' Decisions are solely automated with a significant effect: people can ask for human review and contest the decision.' : ''}</p></div>
+        )}
+        {l.DPDP && (
+          <div><div className="small" style={{ fontWeight: 600 }}>{FRAMEWORKS.DPDP.name}</div>
+            <div className="row" style={{ gap: 6, margin: '6px 0', flexWrap: 'wrap' }}>{!l.DPDP.applies ? <Pill tone="mute">Not applicable: no personal data</Pill> : <>{l.DPDP.sdfCheck ? <Pill tone="warn">Check Significant Data Fiduciary status</Pill> : <Pill tone="good">Standard Data Fiduciary duties</Pill>}{l.DPDP.children && <Pill tone="bad">Children's data: Sec. 9</Pill>}</>}</div>
+            <p className="small mute">{!l.DPDP.applies ? 'The risk profile lists no personal data.' : `${l.DPDP.sdfCheck ? 'The scale or sensitivity of the data means the Government could notify you as a Significant Data Fiduciary (Sec. 10): a DPO in India, a yearly DPIA and an independent audit would then apply.' : 'Notice, consent or legitimate use, security safeguards, breach reporting and rights apply.'}${l.DPDP.children ? ' Verifiable parental consent is needed, and tracking, behavioural monitoring and targeted advertising of children are barred.' : ''}`}</p></div>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+export default function Results({ results, frameworks, profile }) {
   const t = TIERS[results.tier];
   const c = results.cutoffs || { limited: 35, high: 60 };
+  const scoreBand = tierBand(results.residual, c);
+  const byLaw = results.tier !== scoreBand && results.legal?.tier === results.tier;
+  const byFloor = results.tier !== scoreBand && !byLaw;
   return (
     <div className="stack">
       <Panel>
@@ -91,6 +126,9 @@ export default function Results({ results, frameworks }) {
           <div>
             <div className="verdict"><span className="big" style={{ color: t.color }}>{t.label} risk</span>{results.provisional && <span className="tag">Provisional</span>}<span className="mute">score {results.residual}/100</span></div>
             <p className="mute small" style={{ marginTop: 6 }}>{t.meaning}</p>
+            {byLaw && <p className="small" style={{ marginTop: 6 }}><b>Set by law, not by the score.</b> The score alone would be {TIERS[scoreBand].label}; {results.legal.reason} sets the tier to {t.label}.</p>}
+            {byFloor && <p className="small" style={{ marginTop: 6 }}><b>Set by the severe-risk floor.</b> The score alone would be {TIERS[scoreBand].label}; three or more critical principles are at severe risk.</p>}
+            {results.creditSuspended && <p className="small" style={{ marginTop: 6, color: 'var(--bad)' }}><b>Control credit suspended.</b> {(results.signals || []).filter((x) => x.suspends).map((x) => x.text).join('; ')}. The score would be {results.declaredResidual}/100 once resolved.</p>}
             <div style={{ marginTop: 40 }}><RiskScale inherent={results.inherent} residual={results.residual} tier={results.tier} cut={c} /></div>
           </div>
           <div className="grid g2" style={{ gap: 10 }}>
@@ -101,6 +139,7 @@ export default function Results({ results, frameworks }) {
           </div>
         </div>
       </Panel>
+      {profile && <LegalPosition profile={profile} frameworks={frameworks} />}
       <div className="grid g-wide">
         <Panel title="Responsible AI principles"><PrincipleTable principles={results.principles} /></Panel>
         <Panel title="Risk against controls"><PrincipleRadar principles={results.principles} /></Panel>
