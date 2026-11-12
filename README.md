@@ -108,7 +108,7 @@ creates a new organisation at sign-up (the admin list flags those). Disabled acc
 |---|---|---|
 | Client | Next steps, products by lifecycle phase, charts | Registers and re-assesses products, ticks checklists, skips optional checks with a reason, attaches evidence, submits stages, manages actions, controls, data assets and the AI card, connects a model registry, raises changes, incidents and retirement. Sees only its own organisation. |
 | Governance reviewer | Review queue, pipeline board | Approves, approves with conditions or returns submitted stages, with a comment and an optional internal note. Sees Operations. |
-| Governance lead | Gate decisions, risk-by-phase matrix | Also signs stages 2, 5 and 6 for high-risk products, can sign in a reviewer's place, can override a gate with a reason, raises production events. |
+| Governance lead | Gate decisions, risk-by-phase matrix | Also signs stages 2, 5, 6 and every change (stage 8) for high-risk products, can sign in a reviewer's place, can override a gate with a reason, raises production events. |
 | Administrator | Setup shortcuts, recent activity | Approves accounts; manages clients (including logo and colour), users, question bank, frameworks, tier cut-offs, mandatory checks, review target; reads the audit log. |
 
 Permissions are enforced in the database, not only in the app.
@@ -129,17 +129,26 @@ Permissions are enforced in the database, not only in the app.
 3. **Score**: based on the six Responsible AI principles (Social well-being and planet inclusive 14, Privacy and safety 20,
    Fairness and equity 20, Robustness and stability 16, Accountability 16, Transparency 14). About 75% standard questions per
    framework and 25% tailored to the product; four options per question scored 0 / 35 / 70 / 100.
-4. **Tier**: the EU AI Act's four tiers. Cut-offs depend on the frameworks in scope and the strictest wins:
+4. **Tier**: the EU AI Act's four tiers, on one cut-off scale for every product: **Limited from 40, High from 65**
+   (editable in Settings). Scoring version 2:
+   - a principle's risk is 40% its worst item and 60% the average of its items, so one serious exposure is not
+     averaged away; when an output can decide access to something essential or a failure can cause serious harm, no
+     principle is rated below Medium (the stakes floor);
+   - the type of AI is rated by how it is used (one step lower when a person makes every decision, one step higher
+     when outputs take effect without review; agents and biometric identification stay at the top rating);
+   - controls lower a principle's risk by up to 35%, principle by principle, and never while one of that principle's
+     critical controls is not yet in place;
+   - control credit is suspended while an incident is open, a high-priority action is overdue, or a model version in
+     the connected registry has not been approved.
 
-   | Framework | Limited from | High from |
-   |---|---|---|
-   | EU AI Act | 30 | 55 |
-   | GDPR | 35 | 60 |
-   | DPDP Act | 40 | 65 |
-   | None | 35 | 60 |
+   Prohibited practices are always Unacceptable. With the EU AI Act in scope, Annex III uses are at least High
+   (unless the Art. 6(3) exception applies), Annex I products and safety components are High, and Art. 50 uses are at
+   least Limited. GDPR and the DPDP Act set no tier: their position (DPIA, Art. 22, Significant Data Fiduciary check,
+   children's data) is shown law by law beside the result.
 
-   Prohibited practices are always Unacceptable. With the EU AI Act in scope, Annex III uses are at least High and
-   Art. 50 uses at least Limited. Cut-offs are editable in Settings.
+   Every assessment records the scoring version it was made with (`assessment.scoring`) and is always re-scored with
+   it. Assessments made before version 2 keep the earlier method (plain averages, one overall control credit and
+   cut-offs by law: EU AI Act 30/55, GDPR 35/60, DPDP Act 40/65, none 35/60) until they are re-assessed.
 5. **Lifecycle**: ten stages, each with a checklist, required evidence and an exit gate. Checks are **mandatory** or
    **optional**; an optional check can be skipped with the "Skip with reason" button on its row (category, written
    reason, target date for planned work). Submit for review unlocks when mandatory checks are ticked and every optional
@@ -292,6 +301,7 @@ npm run build && node tests/e2e/serve-with-headers.cjs dist 4173 &
 node tests/e2e/lifecycle.cjs               # landing, registration, all 10 stages, returns, override, incident, retirement
 node tests/e2e/drafts-reassess-mobile.cjs  # drafts, re-assessment, mobile layout
 node tests/e2e/features.cjs                # Not known, skips with reasons, controls, actions, AI cards, deck
+node tests/e2e/governance.cjs              # legal position, EU role and Annex I, incident clocks, suspended credit, registry panel
 node tests/e2e/contrast.cjs                # text contrast on every page
 node tests/e2e/random-clicks.cjs 7 3       # random clicks and typing (hostile text too) on every page for every role
 
