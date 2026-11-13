@@ -465,6 +465,12 @@ export function AdminSettings() {
               <span className="small">days</span>
             </label>
           </Panel>
+          <Panel title="Evidence read from a model registry" sub="Evidence and checks that GovernAI reads from Databricks or MLflow are marked with the day they were read. After this many days they are shown as out of date and no longer counted, until the registry is checked again. Stages already approved keep what was current on their approval day.">
+            <label className="row" style={{ gap: 8 }}>
+              <NumberSetting label="Days a registry read stays current" min={1} max={365} fallback={30} width={90} value={state.settings.autoEvidenceDays ?? 30} onSave={(v) => setSetting('autoEvidenceDays', v)} />
+              <span className="small">days</span>
+            </label>
+          </Panel>
           <CutoffEditor />
           <Panel title="Demo data" sub="Data is stored in this browser only.">
             {confirm ? (

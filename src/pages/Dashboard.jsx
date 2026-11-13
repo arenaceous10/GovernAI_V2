@@ -3,6 +3,7 @@ import { TIERS, TIER_ORDER, PRINCIPLE_IDS } from '../data/frameworks.js';
 import { PrincipleRadar } from '../components/Results.jsx';
 import { QUESTIONS } from '../data/questionBank.js';
 import { STAGES, PHASES, phaseOf, ROLES, requiredApprovals } from '../data/lifecycle.js';
+import { evidenceCurrent, recordAsOf, autoMaxAge } from '../data/freshness.js';
 import { Panel, TierBadge, StatusPill, fmtDate, CountUp } from '../components/ui.jsx';
 import { StageMini, Ring, stageLabel } from '../components/Stages.jsx';
 import { useStore, waitingOn, CAN } from '../store/store.jsx';
@@ -12,9 +13,9 @@ import ClientInsights from '../components/Insights.jsx';
 const today = () => new Date().toISOString().slice(0, 10);
 const daysSince = (iso) => (iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)) : 0);
 const live = (systems) => systems.filter((s) => s.status !== 'Draft' && s.assessment && s.status !== 'Retired');
-const progress = (s) => {
+const progress = (s, maxAgeDays) => {
   const st = STAGES[s.stage - 1]; const rec = s.stages?.[s.stage] || { checklist: {}, evidence: {} };
-  return { done: st.checklist.filter((i) => rec.checklist[i]).length + st.evidence.filter((i) => rec.evidence[i]).length, total: st.checklist.length + st.evidence.length };
+  return { done: st.checklist.filter((i) => rec.checklist[i]).length + st.evidence.filter((i) => evidenceCurrent(rec.evidence[i], { asOf: recordAsOf(rec), maxAgeDays })).length, total: st.checklist.length + st.evidence.length };
 };
 const waitsFor = (s, role) => { const w = waitingOn(s); return w.includes(role) || (role === 'lead' && w.includes('assessor')); };
 const overdue = (s) => s.stage === 7 && s.nextReview && s.nextReview < today();
@@ -91,7 +92,7 @@ function ReviewList({ systems, role, nav, empty }) {
   return (
     <div className="worklist">
       {rows.slice(0, LIST_MAX).map((s, i) => {
-        const rec = s.stages[s.stage]; const age = daysSince(rec.submittedAt); const p = progress(s);
+        const rec = s.stages[s.stage]; const age = daysSince(rec.submittedAt); const p = progress(s, autoMaxAge(state.settings));
         const gate = requiredApprovals(s.stage, s.assessment.results.tier).includes('lead');
         return (
           <button key={s.id} type="button" className="work-item" style={{ animationDelay: `${Math.min(i, 10) * 50}ms` }} onClick={() => nav(`/product/${s.id}`)}>
@@ -114,7 +115,7 @@ function ReviewList({ systems, role, nav, empty }) {
 
 // ---------------- client ----------------
 function ClientHome({ nav }) {
-  const { systems, client } = useStore();
+  const { systems, client, state } = useStore();
   const mine = live(systems);
   const drafts = systems.filter((s) => s.status === 'Draft');
   const work = mine.filter((s) => s.status !== 'Blocked' && ['open', 'returned'].includes(s.stages?.[s.stage]?.status));
@@ -140,7 +141,7 @@ function ClientHome({ nav }) {
         {next.length + drafts.length === 0 ? <div className="panel empty-sm"><CheckCircle2 size={22} /> You're up to date. The governance team has everything it needs.</div> : (
           <div className="next-grid">
             {next.slice(0, LIST_MAX).map((s, i) => {
-              const rec = s.stages[s.stage]; const p = progress(s); const ret = rec.status === 'returned';
+              const rec = s.stages[s.stage]; const p = progress(s, autoMaxAge(state.settings)); const ret = rec.status === 'returned';
               return (
                 <button key={s.id} type="button" className={`next-card ${ret ? 'ret' : ''}`} style={{ animationDelay: `${Math.min(i, 10) * 60}ms` }} onClick={() => nav(`/product/${s.id}`)}>
                   <div className="spread" style={{ alignItems: 'flex-start' }}>

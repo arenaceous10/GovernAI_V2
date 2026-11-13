@@ -6,6 +6,7 @@ import { STAGES } from '../data/lifecycle.js';
 import { TIERS, DATA_CATEGORIES, SOURCING, SYSTEM_TYPES, ANNEX_III, PROFILE_QUESTIONS, PRINCIPLES, PRINCIPLE_IDS, selectionLabel } from '../data/frameworks.js';
 import { geoName } from '../data/countries.js';
 import { controlStatus } from '../data/controls.js';
+import { trainingTables } from './governance.js';
 
 const t = (v) => (v == null ? '' : String(v).trim());
 const list = (xs) => (xs || []).filter(Boolean).join('; ');
@@ -50,7 +51,25 @@ const monitorText = (s) => {
   const d = m.drift;
   return `Databricks monitor on ${m.table}: ${m.monitor.status}${d ? `; latest window ${dt(d.windowEnd)}, ${d.checked} columns checked, ${d.drifted.length ? `drift in ${d.drifted.map((x) => x.column).join(', ')}` : 'no drift'}` : ''}${m.performance?.metrics ? `; live ${Object.entries(m.performance.metrics).map(([k, v]) => `${k} ${Math.round(v * 1000) / 1000}`).join(', ')}` : ''}`;
 };
-const datasetLine = (d) => `${d.name}${d.sourceSystem ? ` from ${d.sourceSystem}` : ''}${d.uc?.upstream?.length ? `, built from ${d.uc.upstream.join(', ')}` : ''} (${[d.role, d.classification, d.personal ? 'personal data' : 'no personal data', d.owner ? `owner ${d.owner}` : '', d.steward ? `steward ${d.steward}` : '', d.catalogued ? 'catalogued' : 'not catalogued', d.lineage ? 'lineage recorded' : 'no lineage', d.qualityChecked ? 'quality checked' : 'quality not checked'].filter(Boolean).join(', ')})`;
+// How the version in use was made, as logged on its training run in the registry.
+const runText = (s) => {
+  const c = s.connector; const tt = trainingTables(c);
+  const v = (c?.versions || []).find((x) => String(x.version) === String(tt.version)); const run = v?.run;
+  if (!run) return '';
+  const params = Object.entries(run.params || {});
+  return `Training run of version ${v.version} (${c.kind === 'databricks-uc' ? 'Databricks' : 'MLflow'}, read ${dt(c.lastSync)}): ${[
+    run.startedAt && `trained ${dt(run.startedAt)}${run.user ? ` by ${run.user}` : ''}`,
+    run.code?.source && `code ${run.code.source}`, run.code?.commit && `commit ${run.code.commit.slice(0, 12)}`,
+    run.flavors?.length && `library ${run.flavors.join(', ')}`,
+    params.length && `parameters ${params.slice(0, 15).map(([k, x]) => `${k}=${x}`).join(', ')}`,
+  ].filter(Boolean).join('; ')}`;
+};
+const trainedOnText = (s) => {
+  const tt = trainingTables(s.connector);
+  return tt.tables.length ? `Model version ${tt.version} was trained on (from the registry, read ${dt(s.connector.lastSync)}): ${tt.tables.map((x) => `${x.name}${x.digest ? ` [data version ${x.digest}]` : ''}`).join(', ')}` : '';
+};
+const personalCols = (d) => { const cols = [...new Set((d.uc?.personal?.tagged || []).map((x) => x.column))]; return cols.length ? `, columns tagged personal or sensitive in Unity Catalog: ${cols.slice(0, 12).join(', ')}` : ''; };
+const datasetLine = (d) => `${d.name}${d.sourceSystem ? ` from ${d.sourceSystem}` : ''}${d.uc?.upstream?.length ? `, built from ${d.uc.upstream.join(', ')}` : ''}${personalCols(d)} (${[d.role, d.classification, d.personal ? 'personal data' : 'no personal data', d.owner ? `owner ${d.owner}` : '', d.steward ? `steward ${d.steward}` : '', d.catalogued ? 'catalogued' : 'not catalogued', d.lineage ? 'lineage recorded' : 'no lineage', d.qualityChecked ? 'quality checked' : 'quality not checked'].filter(Boolean).join(', ')})`;
 
 // item(label, text, hint, ref): text '' marks a gap, with a hint on what to add.
 const item = (label, text, hint, ref) => ({ label, text: t(text), hint, ref });
@@ -69,8 +88,8 @@ export function annexIV(s, { client } = {}) {
       item('Instructions for use: limitations and out-of-scope uses', list([card(s, 'outOfScope'), card(s, 'limitations')]), 'Record out-of-scope uses and known limitations on the AI card.', 'Annex IV 1(h); Art. 13'),
     ] },
     { h: '2. Elements of the system and its development', items: [
-      item('Development methods and design choices', list([card(s, 'modelName'), stageEvidence(s, 4)]), 'Explain the model choice, alternatives considered and key design decisions (stage 4 evidence).', 'Annex IV 2(a), 2(b)'),
-      item('Data used: sources, provenance and preparation', list([...(s.datasets || []).map(datasetLine), stageEvidence(s, 3)]), 'Register the datasets in "Data and lineage" and complete stage 3.', 'Annex IV 2(d); Art. 10'),
+      item('Development methods and design choices', list([card(s, 'modelName'), runText(s), stageEvidence(s, 4)]), 'Explain the model choice, alternatives considered and key design decisions (stage 4 evidence).', 'Annex IV 2(a), 2(b)'),
+      item('Data used: sources, provenance and preparation', list([...(s.datasets || []).map(datasetLine), trainedOnText(s), stageEvidence(s, 3)]), 'Register the datasets in "Data and lineage" and complete stage 3.', 'Annex IV 2(d); Art. 10'),
       item('Human oversight measures', list([profileAnswer(s, 'automation') && `Level of automation: ${profileAnswer(s, 'automation')}`, card(s, 'oversight')]), 'Describe who reviews outputs and how they override or stop the system.', 'Annex IV 2(e); Art. 14'),
       item('Planned changes', (s.events || []).filter((e) => e.kind === 'change').map((e) => `${dt(e.at)}: ${e.text}`).join('; '), 'Describe changes planned in advance and how they are controlled.', 'Annex IV 2(f)'),
       item('Validation and testing', list([stageEvidence(s, 5), metricsText(s) && `Metrics: ${metricsText(s)}`, evalText(s)]), 'Complete stage 5 (testing and independent validation) and record the metrics.', 'Annex IV 2(g)'),

@@ -5,6 +5,7 @@ import { DATA_CATEGORIES, familyOf, euRoles, ANNEX_III } from '../data/framework
 import { legalClass, profileRating, hasLink, answerScore, effectiveAnswers, isUnknown, ACTION_BELOW } from './engine.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
 import { isMandatory } from '../data/controls.js';
+import { AUTO_MAX_AGE_DAYS, autoMaxAge, pullState, evidenceCurrent, recordAsOf } from '../data/freshness.js';
 
 const day = (d) => (d instanceof Date ? d : new Date(d)).toISOString().slice(0, 10);
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -142,7 +143,7 @@ export function approvedVersionEntry(x, stage, at) {
   // A change (stage 8) covers the version that was the registry's latest when the change was raised: the registry may
   // have moved on while it was under review, and that newer version has not been looked at.
   const raisedFor = stage === 8 ? [...(x?.events || [])].reverse().find((e) => e.kind === 'change')?.version : null;
-  const reg = raisedFor ?? x?.connector?.latest; const card = x?.card?.modelVersion;
+  const reg = raisedFor ?? x?.connector?.latest; const card = cardVersion(x?.card?.modelVersion);
   const version = reg ?? card;
   if (version == null || String(version).trim() === '') return null;
   return { version: String(version), at, stage, source: reg != null ? 'registry' : 'card' };
@@ -220,18 +221,156 @@ export function stageControlGaps(stage, questions = [], answers = {}, review = {
     .map(({ q, s }) => ({ id: q.id, topic: q.topic, weight: q.weight, level: isUnknown(eff[q.id]) ? 'Not known' : LEVEL_NAMES[eff[q.id]] ?? String(s) }));
 }
 
+// ---------- how long a read from the registry counts ----------
+// See data/freshness.js: 30 days by default, after which a read is shown as out of date and no longer counted.
+const sourceName = (c) => (c?.kind === 'databricks-uc' ? 'Databricks' : 'the registry');
+
+// ---------- the registry version a product runs on ----------
+const usedVersion = (c) => {
+  const vs = c?.versions || [];
+  return vs.find((v) => (v.aliases || []).some((a) => /champion|prod/i.test(a)) || /production/i.test(v.stage || '')) || vs[0] || null;
+};
+const round = (n) => Math.round(n * 10000) / 10000;
+// The version on the AI card without any alias written after it: "3 (champion)" is version 3.
+export const cardVersion = (v) => { const t = String(v ?? '').trim().split(/[\s(]/)[0]; return t || null; };
+
+// The catalog tables that fed the model: datasets logged on the training run, and tables the model version is
+// packaged with (feature tables). Each table once, with where it was seen.
+export function trainingTables(c) {
+  const v = usedVersion(c);
+  if (!v) return { version: null, tables: [], other: 0 };
+  const map = new Map();
+  const add = (name, via, extra = {}) => {
+    if (!map.has(name)) map.set(name, { name, via: [], digest: '', context: '' });
+    const t = map.get(name);
+    if (!t.via.includes(via)) t.via.push(via);
+    if (extra.digest && !t.digest) t.digest = extra.digest;
+    if (extra.context && !t.context) t.context = extra.context;
+  };
+  const ds = v.run?.datasets || [];
+  for (const d of ds) if (d?.table) add(d.table, 'run', d);
+  for (const t of v.dependencies?.tables || []) add(t, 'model');
+  return { version: String(v.version), tables: [...map.values()].sort((a, b) => a.name.localeCompare(b.name)), other: ds.filter((d) => d && !d.table).length };
+}
+
+// What changed between two registered versions. Needs the run details of both (kept for the newest three).
+export function versionDiff(c, from, to) {
+  const find = (n) => (c?.versions || []).find((v) => String(v.version) === String(n));
+  const a = find(from); const b = find(to);
+  if (!a || !b || !a.run || !b.run) return null;
+  const lowerIsBetter = (k) => /loss|error|mse|mae|rmse/i.test(k);
+  const metrics = Object.keys(b.metrics || {}).filter((k) => Number.isFinite(a.metrics?.[k]) && Number.isFinite(b.metrics[k])).sort()
+    .map((k) => ({ name: k, from: a.metrics[k], to: b.metrics[k], worse: lowerIsBetter(k) ? b.metrics[k] > a.metrics[k] : b.metrics[k] < a.metrics[k] }));
+  const keys = [...new Set([...Object.keys(a.run.params || {}), ...Object.keys(b.run.params || {})])].sort();
+  const params = keys.filter((k) => (a.run.params || {})[k] !== (b.run.params || {})[k]).map((k) => ({ name: k, from: a.run.params?.[k] ?? null, to: b.run.params?.[k] ?? null }));
+  const tab = (v) => new Map((v.run.datasets || []).filter((d) => d.table).map((d) => [d.table, d.digest || '']));
+  const ta = tab(a); const tb = tab(b);
+  const data = [...new Set([...ta.keys(), ...tb.keys()])].sort().filter((t) => ta.get(t) !== tb.get(t)).map((t) => ({ table: t, from: ta.has(t) ? ta.get(t) : null, to: tb.has(t) ? tb.get(t) : null }));
+  return { from: String(a.version), to: String(b.version), metrics, params, data, code: { from: a.run.code?.commit || '', to: b.run.code?.commit || '', changed: (a.run.code?.commit || '') !== (b.run.code?.commit || '') } };
+}
+
+// ---------- evidence GovernAI can attach from the registry ----------
+// Keys are stage evidence names. Each entry is a plain-language statement of what was read, with the read date.
+// Only facts the registry actually showed are offered; a missing fact offers nothing (it is never a "no").
+export function autoEvidence(x, { now = new Date(), maxAgeDays = AUTO_MAX_AGE_DAYS } = {}) {
+  const c = x?.connector;
+  if (!c || !c.lastSync) return {};
+  const src = sourceName(c);
+  const st = pullState(c.lastSync, { now, maxAgeDays });
+  const out = {};
+  const put = (item, text) => { out[item] = { text: `${src}, read ${day(c.lastSync)}: ${text}`.slice(0, 900), at: c.lastSync, expired: st.expired, source: src, version: usedVersion(c)?.version ?? null }; };
+  const v = usedVersion(c);
+  const n = (c.versions || []).length;
+  if (v) {
+    const run = v.run;
+    const bits = [`model ${c.model}, version ${v.version}${v.createdAt ? ` registered ${day(v.createdAt)}` : ''}`, `${plural(n, 'version')} kept`];
+    if (run?.code?.commit) bits.push(`code commit ${run.code.commit.slice(0, 12)}`);
+    if (run?.code?.source) bits.push(`trained from ${run.code.source}`);
+    if (run?.flavors?.length) bits.push(`library ${run.flavors.join(', ')}`);
+    const params = Object.entries(run?.params || {});
+    if (params.length) bits.push(`parameters ${params.slice(0, 8).map(([k, val]) => `${k}=${val}`).join(', ')}${params.length > 8 ? ` and ${params.length - 8} more` : ''}`);
+    put('Configuration and version records', `${bits.join('; ')}.`);
+    const metrics = Object.entries(v.metrics || {});
+    const evals = c.genai?.evaluations || [];
+    if (metrics.length || evals.length) {
+      const parts = [];
+      if (metrics.length) parts.push(`version ${v.version} metrics from its training run: ${metrics.slice(0, 8).map(([k, val]) => `${k} ${round(val)}`).join(', ')}`);
+      if (evals.length) parts.push(`evaluation run ${evals[0].name || evals[0].runId} on ${evals[0].at ? day(evals[0].at) : 'an unknown date'}: ${Object.entries(evals[0].metrics || {}).slice(0, 6).map(([k, val]) => `${k} ${round(val)}`).join(', ')}`);
+      put('Evaluation and validation report', `${parts.join('; ')}. These are the figures as logged; they do not replace an independent validation.`);
+    }
+    // A change is compared with the version approved last (else the one before it in the registry).
+    const prev = [...(x.approvedVersions || [])].reverse().find((a) => String(a.version) !== String(v.version))?.version
+      ?? (c.versions || []).find((o) => (+o.version || 0) < (+v.version || 0))?.version;
+    const diff = prev != null ? versionDiff(c, prev, v.version) : null;
+    if (diff && (diff.metrics.length || diff.params.length || diff.data.length)) {
+      const parts = [];
+      if (diff.metrics.length) parts.push(`metrics ${diff.metrics.map((m) => `${m.name} ${round(m.from)} to ${round(m.to)}${m.worse ? ' (lower)' : ''}`).join(', ')}`);
+      if (diff.params.length) parts.push(`parameters changed: ${diff.params.slice(0, 8).map((p) => `${p.name} ${p.from ?? 'not set'} to ${p.to ?? 'not set'}`).join(', ')}`);
+      if (diff.data.length) parts.push(`training data changed: ${diff.data.slice(0, 6).map((d) => d.table).join(', ')}`);
+      if (diff.code.changed) parts.push('code version changed');
+      put('Regression results', `version ${diff.to} compared with version ${diff.from}: ${parts.join('; ')}.`);
+    }
+  }
+  const tt = trainingTables(c);
+  const ucd = (x.datasets || []).filter((d) => d.uc?.name);
+  if (tt.tables.length || ucd.some((d) => d.uc.lineageSource)) {
+    const parts = [];
+    if (tt.tables.length) parts.push(`version ${tt.version} was trained on ${tt.tables.map((t) => `${t.name}${t.digest ? ` (digest ${t.digest})` : ''}`).join(', ')}`);
+    const lin = ucd.filter((d) => (d.uc.upstream?.length || 0) + (d.uc.downstream?.length || 0) > 0);
+    if (lin.length) parts.push(`lineage recorded for ${lin.map((d) => `${d.uc.name}${d.uc.upstream?.length ? ` (from ${d.uc.upstream.slice(0, 4).join(', ')})` : ''}`).join('; ')}`);
+    const owners = ucd.filter((d) => d.owner);
+    if (owners.length) parts.push(`owners: ${owners.map((d) => `${d.uc.name} ${d.owner}`).slice(0, 6).join(', ')}`);
+    if (parts.length) put('Dataset lineage, version and access record', `${parts.join('; ')}.`);
+  }
+  const mon = c.monitoring;
+  if (String(mon?.monitor?.status || '').toUpperCase() === 'ACTIVE') {
+    const parts = [`a data monitor is active on ${mon.table || 'the monitored table'}`];
+    if (mon.drift) parts.push(`latest window ${mon.drift.windowEnd ? day(mon.drift.windowEnd) : 'not dated'}: ${mon.drift.checked} columns checked, ${mon.drift.drifted?.length || 0} drifted`);
+    const pm = Object.entries(mon.performance?.metrics || {});
+    if (pm.length) parts.push(`live performance ${pm.slice(0, 6).map(([k, val]) => `${k.replace(/_/g, ' ')} ${round(val)}`).join(', ')}`);
+    put('Monitoring dashboard and reports', `${parts.join('; ')}.`);
+    const slices = mon.performance?.slices || [];
+    if (slices.length) {
+      const keys = [...new Set(slices.map((s0) => s0.key))];
+      const first = Object.keys(slices[0].metrics || {})[0];
+      const line = first ? slices.slice(0, 10).map((s0) => `${s0.key} ${s0.value}: ${Number.isFinite(s0.metrics?.[first]) ? round(s0.metrics[first]) : 'n/a'}`).join(', ') : '';
+      put('Fairness and subgroup assessment', `live performance is reported by ${keys.join(', ')}${line ? ` (${first.replace(/_/g, ' ')}: ${line})` : ''}. Compare the groups; the figures alone are not a fairness conclusion.`);
+    }
+  }
+  return out;
+}
+
+// An automatic statement is a copy of what the registry showed on one day. If the registry (read again) now shows
+// something else, or nothing, the reviewer is told. Only the facts are compared, not the read date. This also
+// catches a statement that was altered after it was attached.
+const factsOf = (text) => String(text || '').replace(/^[^:]*, read \d{4}-\d{2}-\d{2}: /, '');
+export function autoMismatch(x, rec) {
+  const now = autoEvidence(x, { maxAgeDays: 36500 });
+  const out = [];
+  for (const [item, v] of Object.entries(rec?.evidence || {})) {
+    if (!v?.auto) continue;
+    if (!now[item]) out.push({ item, reason: 'gone' });
+    else if (factsOf(now[item].text) !== factsOf(v.ref)) out.push({ item, reason: 'differs', now: now[item].text });
+  }
+  return out;
+}
+
 // ---------- what a connected registry can confirm ----------
-// Checklist items where the registry gives an independent reading. The tick stays with the client; the reviewer sees
-// "confirmed by the registry" or "not confirmed" beside it. Keys are checklist item texts.
-export function registryChecks(x) {
+// Checklist items where the registry gives an independent reading. The tick stays with the client; beside it the
+// screen shows "auto-verified" with the read date, "out of date" once the read is too old, or "not confirmed".
+// Keys are checklist item texts.
+export function registryChecks(x, { now = new Date(), maxAgeDays = AUTO_MAX_AGE_DAYS } = {}) {
   const c = x?.connector;
   if (!c) return {};
+  const st = pullState(c.lastSync, { now, maxAgeDays });
+  const stamp = { at: c.lastSync || null, expired: st.expired, source: sourceName(c) };
   const out = {};
   const mon = c.monitoring?.monitor?.status;
   out['Monitoring dashboards and alerts are live.'] = String(mon || '').toUpperCase() === 'ACTIVE'
     ? { ok: true, note: `A data monitor is active on ${c.monitoring.table || 'the monitored table'}` }
     : { ok: false, note: mon ? `The data monitor status is ${mon}` : 'No active data monitor was found in the registry workspace' };
-  const card = x.card?.modelVersion;
+  // "Fill from registry" writes the version with its alias, e.g. "3 (champion)": compare the version itself.
+  const card = cardVersion(x.card?.modelVersion);
   out['Approval status and production version are updated in the inventory.'] = c.latest != null && card != null && String(card) === String(c.latest)
     ? { ok: true, note: `The AI card and the registry both say version ${c.latest}` }
     : { ok: false, note: c.latest == null ? 'The registry has no version yet' : `The registry's latest version is ${c.latest}; the AI card says ${card || 'nothing'}` };
@@ -239,6 +378,39 @@ export function registryChecks(x) {
   out['Previous configuration is recoverable.'] = n >= 2
     ? { ok: true, note: `${n} versions are kept in the registry, so the previous one can be restored` }
     : { ok: false, note: 'The registry holds a single version, so there is nothing to roll back to' };
+  // Only a positive reading: testing by group may well have been done somewhere the registry cannot see.
+  const groups = [...new Set((c.monitoring?.performance?.slices || []).map((s0) => s0.key))];
+  if (groups.length) out['Results are analyzed by relevant groups and worst-performing segments.'] = { ok: true, note: `The monitor reports performance by ${groups.join(', ')}` };
+  for (const k of Object.keys(out)) out[k] = { ...out[k], ...stamp };
+  return out;
+}
+
+// ---------- what the catalog shows against what was declared ----------
+// For the reviewer and the client. Each flag says what to look at; nothing is changed automatically.
+export function databricksFlags(x) {
+  if (!x) return [];
+  const out = [];
+  const ds = x.datasets || [];
+  const tagged = ds.filter((d) => d.uc?.personal?.tagged?.length);
+  const cols = (d) => [...new Set(d.uc.personal.tagged.map((t) => t.column))];
+  const data = x.assessment?.profile?.data || [];
+  const declaredPersonal = data.some((d) => d !== 'none');
+  if (tagged.length && !declaredPersonal) {
+    out.push({ id: 'personal-profile', text: `The risk profile says no personal data is used, but Unity Catalog tags columns as personal or sensitive: ${tagged.map((d) => `${d.uc.name} (${cols(d).slice(0, 5).join(', ')})`).join('; ')}. Re-assess the product, or correct the tags.` });
+  } else {
+    const wrong = tagged.filter((d) => !d.personal);
+    if (wrong.length) out.push({ id: 'personal-dataset', text: `${plural(wrong.length, 'dataset')} marked "no personal data" ${wrong.length === 1 ? 'has' : 'have'} columns tagged as personal or sensitive in Unity Catalog: ${wrong.map((d) => `${d.uc.name} (${cols(d).slice(0, 5).join(', ')})`).join('; ')}.` });
+  }
+  const tt = trainingTables(x.connector);
+  const known = new Set(ds.flatMap((d) => [d.uc?.name, d.name]).filter(Boolean));
+  const missing = tt.tables.filter((t) => !known.has(t.name));
+  if (missing.length) out.push({ id: 'undeclared', text: `Model version ${tt.version} was trained on ${plural(missing.length, 'table')} not registered under Data and lineage: ${missing.map((t) => t.name).join(', ')}. Import ${missing.length === 1 ? 'it' : 'them'} so ownership, lineage and personal data are checked.` });
+  const has = new Set((x.assessment?.questions || []).map((q) => q.id));
+  const read = ds.filter((d) => d.uc?.lineageSource);
+  if (has.has('DG-C2') && typeof x.assessment?.answers?.['DG-C2'] === 'number' && x.assessment.answers['DG-C2'] >= 2 && read.length
+    && !read.some((d) => (d.uc.upstream?.length || 0) + (d.uc.downstream?.length || 0) > 0)) {
+    out.push({ id: 'lineage', text: `Data lineage is answered as documented, but Unity Catalog shows no lineage for the ${plural(read.length, 'imported table')}: ${read.map((d) => d.uc.name).slice(0, 5).join(', ')}.` });
+  }
   return out;
 }
 
@@ -268,4 +440,4 @@ export function compareMetrics(cardMetrics, live, tolerance = 0.05) {
   return out;
 }
 
-export { hasLink };
+export { hasLink, AUTO_MAX_AGE_DAYS, autoMaxAge, pullState, evidenceCurrent, recordAsOf };

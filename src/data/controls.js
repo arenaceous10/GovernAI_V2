@@ -5,6 +5,7 @@
 // compass: the Responsible AI Compass direction the control serves (Fractal, "Responsible AI by Design:
 // Navigating with a Compass"): four directions plus four cross-cutting principles.
 import { STAGES } from './lifecycle.js';
+import { evidenceCurrent, recordAsOf } from './freshness.js';
 
 export const COMPASS = {
   fairness: { name: 'Fairness', dir: 'N', kind: 'direction', text: 'Equitable outcomes across groups' },
@@ -171,18 +172,20 @@ export function compassScores(sys) {
 
 // How far a stage is: mandatory checks, optional checks (ticked or skipped with a reason) and evidence.
 // pct counts every item equally, the same way the progress ring does; ready means it can be submitted.
-export function stageCompletion(st, rec, tier, rules) {
+// Evidence attached automatically from a registry counts only while the read behind it is current (30 days unless
+// the administrator changed it); for an approved stage, as it stood on the approval day.
+export function stageCompletion(st, rec, tier, rules, maxAgeDays) {
   const list = st?.checklist || []; const ev = st?.evidence || [];
   const mand = list.filter((i) => isMandatory(i, tier, rules));
   const opt = list.filter((i) => !isMandatory(i, tier, rules));
   const out = {
     mandatory: { done: mand.filter((i) => itemState(rec, i) === 'done').length, total: mand.length },
     optional: { done: opt.filter((i) => itemState(rec, i) === 'done').length, skipped: opt.filter((i) => itemState(rec, i) === 'skipped').length, total: opt.length },
-    evidence: { done: ev.filter((i) => rec?.evidence?.[i]).length, total: ev.length },
+    evidence: { done: ev.filter((i) => evidenceCurrent(rec?.evidence?.[i], { asOf: recordAsOf(rec), maxAgeDays })).length, total: ev.length },
   };
   const total = list.length + ev.length;
   const done = out.mandatory.done + out.optional.done + out.optional.skipped + out.evidence.done;
   return { ...out, done, total, pct: total ? Math.round((done / total) * 100) : 100 };
 }
 // The same percentage as the completion scale, so the rail and the scale always agree.
-export const stagePct = (st, rec, tier, rules) => stageCompletion(st, rec, tier, rules).pct;
+export const stagePct = (st, rec, tier, rules, maxAgeDays) => stageCompletion(st, rec, tier, rules, maxAgeDays).pct;

@@ -113,6 +113,54 @@ const arr = (v) => (Array.isArray(v) ? v : []);
 const num = (v) => (Number.isFinite(+v) ? +v : null);
 const iso = (ms) => (num(ms) != null ? new Date(+ms).toISOString() : null);
 
+// ---------- what a training run says about how the model was made ----------
+// Read with the metrics, for the newest three versions. Everything is cut to a safe length. Parameters whose names
+// look like credentials are never read, and a repository address is kept without any user name or token in it.
+const TABLE_NAME = /^[A-Za-z0-9_-]{1,255}\.[A-Za-z0-9_-]{1,255}\.[A-Za-z0-9_-]{1,255}$/;
+const SECRET_KEY = /key|token|secret|passw|pwd|credential|auth|bearer|signature/i;
+const str = (v, n) => (typeof v === 'string' || typeof v === 'number' ? String(v).slice(0, n) : '');
+function cleanRepo(v) {
+  try {
+    const u = new URL(String(v || ''));
+    if (!['https:', 'http:'].includes(u.protocol)) return '';
+    return `${u.origin}${u.pathname}`.slice(0, 200);
+  } catch { return ''; }
+}
+// A dataset logged with mlflow.log_input: the catalog table it came from, when it names one.
+function datasetTable(d) {
+  let src = null;
+  try { src = JSON.parse(d.source); } catch { /* the source is not JSON */ }
+  const fromSource = src && typeof src === 'object' ? [src.table_name, src.delta_table_name, src.name].find((x) => typeof x === 'string' && TABLE_NAME.test(x)) : null;
+  if (fromSource) return fromSource;
+  const bare = String(d.name || '').replace(/@v?\d+$/i, '');
+  return TABLE_NAME.test(bare) ? bare : null;
+}
+export function runFacts(run) {
+  const tags = Object.fromEntries(arr(run?.data?.tags).filter((t) => t && t.key != null).map((t) => [String(t.key), t.value]));
+  const tag = (...keys) => { for (const k of keys) if (typeof tags[k] === 'string' && tags[k].trim()) return tags[k]; return ''; };
+  let flavors = [];
+  try {
+    const hist = JSON.parse(tag('mlflow.log-model.history') || '[]');
+    const all = [...new Set(arr(hist).flatMap((h) => Object.keys(h?.flavors || {})))].map((f) => str(f, 40));
+    flavors = (all.filter((f) => f !== 'python_function').length ? all.filter((f) => f !== 'python_function') : all).slice(0, 5);
+  } catch { /* no model history tag */ }
+  const params = Object.fromEntries(arr(run?.data?.params).filter((x) => x && x.key != null && !SECRET_KEY.test(String(x.key))).slice(0, 25).map((x) => [str(x.key, 60), str(x.value, 80)]));
+  const datasets = arr(run?.inputs?.dataset_inputs).filter((x) => x?.dataset && typeof x.dataset === 'object').slice(0, 20).map((x) => ({
+    name: str(x.dataset.name, 200), table: datasetTable(x.dataset), digest: str(x.dataset.digest, 64), sourceType: str(x.dataset.source_type, 40),
+    context: str(arr(x.tags).find((t) => t?.key === 'mlflow.data.context')?.value, 40),
+  }));
+  return {
+    startedAt: iso(run?.info?.start_time), endedAt: iso(run?.info?.end_time), status: str(run?.info?.status, 20), user: str(tag('mlflow.user'), 200),
+    code: {
+      commit: str(tag('mlflow.source.git.commit', 'mlflow.databricks.gitRepoCommit'), 64).replace(/[^A-Za-z0-9]/g, ''),
+      repo: cleanRepo(tag('mlflow.source.git.repoURL', 'mlflow.databricks.gitRepoUrl')),
+      branch: str(tag('mlflow.source.git.branch', 'mlflow.databricks.gitRepoReference'), 120),
+      source: str(tag('mlflow.databricks.notebookPath', 'mlflow.source.name'), 300),
+    },
+    flavors, params, datasets,
+  };
+}
+
 // Reads up to 50 versions, newest first, with metrics for the newest 3. Returns { model, versions, latest }.
 export async function readRegistry({ kind, host, model, token }, { fetchImpl = defaultFetch, allowLocal = false, resolve } = {}) {
   if (!KINDS[kind]) throw new Error('Choose MLflow or Databricks Unity Catalog');
@@ -128,7 +176,8 @@ export async function readRegistry({ kind, host, model, token }, { fetchImpl = d
       getJson(fetchImpl, `${base}/api/2.0/mlflow/registered-models/get?name=${encodeURIComponent(name)}`, token).catch(() => ({})),
     ]);
     const rm = m.registered_model || {};
-    info = { description: String(rm.description || '').slice(0, 1000), owner: '', createdBy: String(rm.user_id || '').slice(0, 200) };
+    info = { description: String(rm.description || '').slice(0, 1000), owner: '', createdBy: String(rm.user_id || '').slice(0, 200),
+      tags: Object.fromEntries(arr(rm.tags).filter((t) => t && t.key != null && !SECRET_KEY.test(String(t.key))).slice(0, 20).map((t) => [str(t.key, 60), str(t.value, 120)])) };
     versions = arr(j.model_versions).filter((v) => v && typeof v === 'object').map((v) => ({
       version: String(v.version), createdAt: iso(v.creation_timestamp), status: v.status || '', stage: v.current_stage || '',
       aliases: arr(v.aliases).map(String), runId: v.run_id || '', description: String(v.description || '').slice(0, 500), source: String(v.source || '').slice(0, 300),
@@ -155,7 +204,23 @@ export async function readRegistry({ kind, host, model, token }, { fetchImpl = d
       const r = await getJson(fetchImpl, `${base}/api/2.0/mlflow/runs/get?run_id=${encodeURIComponent(v.runId)}`, token);
       v.metrics = Object.fromEntries(arr(r.run?.data?.metrics).filter((x) => x && x.key != null).slice(0, 30).map((x) => [String(x.key).slice(0, 60), num(x.value)]).filter(([, x]) => x != null));
       if (r.run?.info?.experiment_id) v.experimentId = String(r.run.info.experiment_id).slice(0, 40);
+      v.run = runFacts(r.run);
     } catch { v.metrics = {}; }
+  }
+  // Unity Catalog records the tables and functions a model was packaged with (feature tables). Read for the version
+  // in use: the one marked champion or production, else the newest.
+  if (kind === 'databricks-uc') {
+    const used = versions.find((v) => (v.aliases || []).some((a) => /champion|prod/i.test(a))) || versions[0];
+    if (used && /^[0-9]{1,9}$/.test(used.version)) {
+      try {
+        const path = name.split('.').map(encodeURIComponent).join('.');
+        const j = await getJson(fetchImpl, `${base}/api/2.1/unity-catalog/models/${path}/versions/${used.version}`, token);
+        const deps = arr(j.model_version_dependencies?.dependencies).filter((d) => d && typeof d === 'object');
+        const tables = [...new Set(deps.map((d) => d.table?.table_full_name).filter((t) => typeof t === 'string' && TABLE_NAME.test(t)))].slice(0, 30);
+        const functions = [...new Set(deps.map((d) => d.function?.function_full_name).filter((t) => typeof t === 'string' && TABLE_NAME.test(t)))].slice(0, 30);
+        if (tables.length || functions.length) used.dependencies = { tables, functions };
+      } catch { /* dependencies are optional */ }
+    }
   }
   return { model: name, base, info, versions: versions.slice(0, 50), latest: versions[0]?.version || null };
 }
@@ -215,7 +280,7 @@ export async function readGenAI({ base, token, experiment, versions = [] }, { fe
 }
 
 // ---------- SQL (for monitoring metrics and lineage system tables) ----------
-const TABLE = /^[A-Za-z0-9_-]{1,255}\.[A-Za-z0-9_-]{1,255}\.[A-Za-z0-9_-]{1,255}$/;
+const TABLE = TABLE_NAME;
 const quote = (full) => full.split('.').map((p) => `\`${p}\``).join('.');
 export const validTable = (t) => TABLE.test(String(t || '').trim());
 export const validWarehouse = (w) => /^[A-Za-z0-9]{8,40}$/.test(String(w || '').trim());
@@ -351,6 +416,22 @@ export async function readMonitoring({ base, token, table, warehouseId }, { fetc
   return out;
 }
 
+// ---------- personal data: column tags, masks and name hints ----------
+// A tag marks a column as personal or sensitive when it is one of Databricks' own classification tags (class.*,
+// set by Data Classification) or its name or value says so (pii, personal, sensitive, phi, restricted...). A tag
+// that says the opposite (pii = false, non_pii) is not counted.
+const PERSONAL_WORD = /(^|[^a-z])(pii|personal|personally|sensitive|sensitivity|phi|pci|gdpr|dpdp|special[_ -]?category|confidential|restricted)/i;
+const NEGATIVE_VALUE = /^(false|no|none|n|0|non[-_ ]?pii|not[-_ ]?pii|public|low|internal|non[-_ ]?sensitive|not[-_ ]?sensitive)$/i;
+export function personalTag(name, value) {
+  const n = String(name || '').trim(); const v = String(value ?? '').trim();
+  if (!n || /^(non|not)[-_ ]/i.test(n)) return false;
+  if (/^class\./i.test(n)) return true;
+  if (PERSONAL_WORD.test(n)) return !NEGATIVE_VALUE.test(v);
+  return PERSONAL_WORD.test(v);
+}
+// Column names that usually hold personal data. A hint for a person to look at, never counted as proof either way.
+const PERSONAL_NAME = /(^|_)(e_?mail|phone|mobile|msisdn|dob|date_of_birth|birth_?date|ssn|aadhaar|aadhar|pan_?(no|number)|passport|first_?name|last_?name|full_?name|surname|address|post_?code|zip_?code|pin_?code|gender|ethnicity|religion|ip_?address|national_?id|nhs_?(no|number)|iban|account_?(no|number)|card_?(no|number)|latitude|longitude)(_|$)/i;
+
 // ---------- Unity Catalog tables: owner, description, columns, lineage, monitoring ----------
 export async function readTables({ base, token, tables, warehouseId }, { fetchImpl = defaultFetch } = {}) {
   const names = [...new Set((tables || []).map((t) => String(t).trim()).filter(Boolean))].slice(0, 20);
@@ -371,12 +452,34 @@ export async function readTables({ base, token, tables, warehouseId }, { fetchIm
         : `The lineage system table is not readable (${e.message}), so lineage came from Databricks' lineage endpoint instead`;
     }
   }
+  // Column tags come from the information schema, which needs a SQL warehouse. When they cannot be read the result
+  // says so (tagsRead: false): "no tags found" and "tags not read" are different answers.
+  let tagRows = null; let tagNote = '';
+  if (warehouseId && validWarehouse(warehouseId) && names.length) {
+    try {
+      const params = names.map((n, i) => ({ name: `t${i}`, value: n }));
+      const list = names.map((_, i) => `:t${i}`).join(', ');
+      tagRows = await sql(fetchImpl, base, token, warehouseId,
+        `SELECT catalog_name, schema_name, table_name, column_name, tag_name, tag_value FROM system.information_schema.column_tags
+         WHERE concat_ws('.', catalog_name, schema_name, table_name) IN (${list}) LIMIT 500`, params);
+    } catch (e) { tagNote = `Column tags could not be read (${String(e.message || '').slice(0, 160)}), so personal-data columns are not confirmed from tags`; }
+  }
   const one = async (name) => {
     const t = await tableInfo(fetchImpl, base, token, name);
+    const colNames = arr(t.columns).filter((c) => c && c.name != null).map((c) => String(c.name).slice(0, 120));
+    const tagged = (tagRows || []).filter((x) => x && `${x.catalog_name}.${x.schema_name}.${x.table_name}` === name && x.column_name != null && personalTag(x.tag_name, x.tag_value))
+      .map((x) => ({ column: String(x.column_name).slice(0, 120), tag: `${String(x.tag_name).slice(0, 60)}${String(x.tag_value ?? '').trim() && !/^(true|yes|y|1)$/i.test(String(x.tag_value).trim()) ? `=${String(x.tag_value).trim().slice(0, 40)}` : ''}` }))
+      .sort((a, b) => a.column.localeCompare(b.column) || a.tag.localeCompare(b.tag));
+    const taggedCols = new Set(tagged.map((x) => x.column));
     const r = {
       name, owner: String(t.owner || '').slice(0, 200), comment: String(t.comment || '').slice(0, 500), type: String(t.table_type || ''),
       format: String(t.data_source_format || ''), columns: arr(t.columns).length, createdBy: String(t.created_by || '').slice(0, 200),
       updatedAt: iso(t.updated_at), upstream: [], downstream: [], lineageSource: null, monitor: null,
+      personal: {
+        tagsRead: !!tagRows, tagged: tagged.slice(0, 40),
+        masked: arr(t.columns).filter((c) => c && c.name != null && c.mask && typeof c.mask === 'object').map((c) => String(c.name).slice(0, 120)).slice(0, 40),
+        hints: colNames.filter((c) => !taggedCols.has(c) && PERSONAL_NAME.test(c)).slice(0, 40),
+      },
     };
     if (lineageRows) {
       r.upstream = [...new Set(lineageRows.filter((x) => x.target_table_full_name === name && x.source_table_full_name).map((x) => x.source_table_full_name))].slice(0, 30);
@@ -399,6 +502,6 @@ export async function readTables({ base, token, tables, warehouseId }, { fetchIm
   const results = await Promise.allSettled(names.map(one));
   return {
     tables: results.map((x, i) => (x.status === 'fulfilled' ? x.value : { name: names[i], error: x.reason?.message || 'Could not read the table' })),
-    notes: lineageNote ? [lineageNote] : [],
+    notes: [lineageNote, tagNote].filter(Boolean),
   };
 }

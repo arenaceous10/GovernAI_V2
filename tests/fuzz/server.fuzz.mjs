@@ -85,6 +85,11 @@ for (let i = 0; i < 2000; i++) {
 // 5. Registry and monitoring responses of any shape: friendly errors only, never a crash or a leak.
 const junk = () => r.pick([null, 1, 'x', [], {}, { model_versions: r.pick([null, 'x', [null, 1, { version: r.pick([null, 3, '2', {}]), aliases: r.pick([null, 'a', ['champion']]), run_id: r.pick(['../../x', 'abc', null]) }]]) },
   { run: { data: { metrics: r.pick([null, [{ key: 'auc', value: 'NaN' }, { key: null, value: 1 }, { key: 'x'.repeat(500), value: 1e308 }]]) } } },
+  { run: { info: r.pick([null, 'x', { start_time: r.pick(['x', -1, 1e20, 1762500000000]), status: {} }]), data: { params: r.pick([null, 'x', [null, { key: 'api_token', value: 'LEAK-ME' }, { key: {}, value: [] }, { key: 'depth', value: 'y'.repeat(5000) }]]),
+    tags: r.pick([null, 5, [null, { key: 'mlflow.source.git.repoURL', value: r.pick(['https://u:LEAK-ME@github.com/a/b', 'javascript:alert(1)', 'x', null]) }, { key: 'mlflow.log-model.history', value: r.pick(['{', '[1]', '[{"flavors":"x"}]', '[{"flavors":{"sklearn":{}}}]', null]) }, { key: 'mlflow.source.git.commit', value: r.pick(['<script>', 'abc123', {}]) }]]) },
+    inputs: r.pick([null, 'x', { dataset_inputs: r.pick([null, 'x', [null, 1, { dataset: r.pick([null, 'x', { name: r.pick([null, 'a.b.c@v2', {}, 'x'.repeat(900)]), source: r.pick([null, '{', '{"table_name":"a.b.c; DROP"}', '{"delta_table_name":"a.b.c"}', '[]']), digest: r.pick([null, {}, 'd']) }]), tags: r.pick([null, 'x', [null, { key: 'mlflow.data.context', value: {} }]]) }]]) }]) } },
+  { model_version_dependencies: r.pick([null, 'x', { dependencies: r.pick([null, 'x', [null, 1, { table: r.pick([null, 'x', { table_full_name: r.pick([null, 'a.b.c', 'a.b.c`; DROP', {}]) }]) }, { function: { function_full_name: 5 } }]]) }]) },
+  { table_id: 't', columns: r.pick([null, 'x', [null, 1, { name: r.pick([null, 'email', {}, 'x'.repeat(900)]), mask: r.pick([null, 'x', {}]) }]]) },
   { status: { state: r.pick(['SUCCEEDED', 'FAILED']), error: { message: 'x' } }, result: { data_array: r.pick([null, [[1, 2]], 'x']) }, manifest: { schema: { columns: r.pick([null, [{ name: 'column_name' }]]) } } }]);
 const fakeFetch = async (url) => {
   const st = r.pick([200, 200, 200, 200, 404, 403, 500, 302]);
@@ -94,13 +99,28 @@ const fakeFetch = async (url) => {
 const friendly = (e) => typeof e?.message === 'string' && e.message.length < 300 && !/TypeError|undefined|Cannot read properties|is not a function|of null/.test(e.message);
 for (let i = 0; i < 1500; i++) {
   const kind = r.pick(['mlflow', 'databricks-uc']);
-  try { await readRegistry({ kind, host: 'https://public.example', model: kind === 'mlflow' ? 'model' : 'a.b.c', token: 't' }, { fetchImpl: fakeFetch, resolve }); }
-  catch (e) { S.check(friendly(e), 'registry read fails with an internal error', e.message); }
+  let regOut = null;
+  try { regOut = await readRegistry({ kind, host: 'https://public.example', model: kind === 'mlflow' ? 'model' : 'a.b.c', token: 't' }, { fetchImpl: fakeFetch, resolve }); }
+  catch (e) { S.check(friendly(e), 'registry read fails with an internal error', e.message); regOut = null; }
+  if (regOut) {
+    const text = JSON.stringify(regOut);
+    S.check(!text.includes('LEAK-ME'), 'a credential from the run reached the stored result', text.slice(0, 200));
+    S.check(text.length < 120000, 'registry result is too large to store', String(text.length));
+    for (const v of regOut.versions) {
+      for (const d of v.run?.datasets || []) S.check(d.table === null || /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(d.table), 'unsafe training table name kept', short(d));
+      for (const t of v.dependencies?.tables || []) S.check(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(t), 'unsafe dependency table name kept', t);
+      S.check(!v.run || /^[A-Za-z0-9]*$/.test(v.run.code.commit), 'commit is not plain text', short(v.run?.code));
+      S.check(!v.run || v.run.code.repo === '' || /^https?:\/\/[^@]*$/.test(v.run.code.repo), 'repository address keeps user info or an odd scheme', v.run?.code?.repo);
+    }
+  }
   try { await readMonitoring({ base: 'https://public.example', token: 't', table: 'a.b.c', warehouseId: r.pick(['2bce45dbd06434d1', '']) }, { fetchImpl: fakeFetch }); }
   catch (e) { S.check(friendly(e), 'monitoring read fails with an internal error', e.message); }
   try { await readGenAI({ base: 'https://public.example', token: 't', experiment: r.pick(['', '/Users/x/exp', '123']), versions: [] }, { fetchImpl: fakeFetch }); }
   catch (e) { S.check(friendly(e), 'GenAI read fails with an internal error', e.message); }
-  try { await readTables({ base: 'https://public.example', token: 't', tables: ['a.b.c', 'd.e.f'], warehouseId: '2bce45dbd06434d1' }, { fetchImpl: fakeFetch }); }
+  try {
+    const tb = await readTables({ base: 'https://public.example', token: 't', tables: ['a.b.c', 'd.e.f'], warehouseId: '2bce45dbd06434d1' }, { fetchImpl: fakeFetch });
+    for (const t of tb.tables) if (!t.error) S.check(t.personal && Array.isArray(t.personal.tagged) && Array.isArray(t.personal.masked) && Array.isArray(t.personal.hints) && typeof t.personal.tagsRead === 'boolean', 'table result has no personal-data section', short(t.personal));
+  }
   catch (e) { S.check(friendly(e), 'table read fails with an internal error', e.message); }
   S.tick(4);
 }

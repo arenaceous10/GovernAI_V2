@@ -181,5 +181,64 @@ await check('an action marked in progress keeps that status when the product is 
   assert.equal(sys(z.id).actions.find((k) => k.id === a.id).status, 'In progress');
   assert.equal(sys(z.id).events.at(-1).seriousKind, undefined, 'only serious incidents carry a kind');
 });
+await check('evidence from the registry carries its read date, is refused when the read is old, and never replaces an upload', async () => {
+  await as('admin'); await run(() => api().resetDemo());
+  const p = api().state.systems.find((x) => x.status === 'Active' && x.stage === 4 && (x.stages?.[4]?.status || 'open') === 'open');
+  assert.ok(p, 'a product at stage 4');
+  await as('client', p.clientId);
+  const item = 'Configuration and version records';
+  assert.match(api().attachAuto(p.id, 4, item), /nothing for this item/, 'no connection, nothing to attach');
+  const result = { latest: '3', info: { owner: 'risk-team' }, versions: [{ version: '3', runId: 'r3', metrics: { accuracy: 0.93 }, run: { code: { commit: 'abc123def456' }, params: { max_depth: '6' }, flavors: ['sklearn'], datasets: [] } }, { version: '2' }] };
+  await run(() => api().connectModel(p.id, { kind: 'databricks-uc', host: 'https://adb-1.2.azuredatabricks.net', model: 'main.claims.triage', tokenSealed: 'v1.x', result }));
+  assert.ok(sys(p.id).connector.lastSync, 'connected and read');
+  // someone else's text is never stored: the action takes no text at all
+  let err; await run(() => { err = api().attachAuto(p.id, 4, item); });
+  assert.equal(err, '');
+  const ev = sys(p.id).stages[4].evidence[item];
+  assert.match(ev.ref, /main\.claims\.triage/); assert.match(ev.ref, /abc123def456/);
+  assert.equal(ev.auto.source, 'Databricks'); assert.equal(ev.auto.at, sys(p.id).connector.lastSync); assert.equal(ev.auto.version, '3');
+  assert.ok(api().state.audit.some((a) => a.action === 'Evidence attached from Databricks' && String(a.detail).includes(item)), 'it is in the audit log');
+  // an item the registry says nothing about
+  await run(() => { err = api().attachAuto(p.id, 4, 'Human oversight plan'); });
+  assert.match(err, /nothing for this item/);
+  await run(() => { err = api().attachAuto(p.id, 4, 'Not an evidence item'); });
+  assert.match(err, /cannot be changed/);
+  // an upload or a link a person attached is never overwritten
+  await run(() => api().setEvidence(p.id, 4, item, { ref: 'https://example.com/config-v3', file: '', at: new Date().toISOString() }));
+  await run(() => { err = api().attachAuto(p.id, 4, item); });
+  assert.match(err, /already attached/);
+  assert.equal(sys(p.id).stages[4].evidence[item].ref, 'https://example.com/config-v3');
+  // the administrator's limit is used: a 1-day limit and a read from last week
+  await run(() => api().setEvidence(p.id, 4, item, null));
+  await as('admin'); await run(() => api().setSetting('autoEvidenceDays', 1));
+  await as('client', p.clientId);
+  await run(() => api().applyModelSync(p.id, result));
+  const RealDate = Date;   // eight days pass
+  globalThis.Date = class extends RealDate { constructor(...a) { if (a.length) super(...a); else super(RealDate.now() + 8 * 86400000); } static now() { return RealDate.now() + 8 * 86400000; } };
+  try { await run(() => { err = api().attachAuto(p.id, 4, item); }); } finally { globalThis.Date = RealDate; }
+  assert.match(err, /too long ago/);
+  assert.equal(sys(p.id).stages[4].evidence[item], null);
+  // other roles cannot attach
+  await as('assessor');
+  await run(() => { err = api().attachAuto(p.id, 4, item); });
+  assert.match(err, /Only the client/);
+  await as('admin'); await run(() => api().setSetting('autoEvidenceDays', 30));
+});
+await check('importing tables marks a dataset as personal when the catalog tags say so, and never switches it off', async () => {
+  await as('admin'); await run(() => api().resetDemo());
+  const p = api().state.systems.find((x) => x.status === 'Active' && x.stage === 4);
+  await as('client', p.clientId);
+  await run(() => api().connectModel(p.id, { kind: 'databricks-uc', host: 'https://adb-1.2.azuredatabricks.net', model: 'main.claims.triage', tokenSealed: 'v1.x', result: { latest: '1', versions: [{ version: '1' }] } }));
+  const t = (name, tagged) => ({ name, owner: 'data-team', columns: 5, upstream: [], downstream: [], lineageSource: 'system.access.table_lineage', personal: { tagsRead: true, tagged, masked: [], hints: ['postcode'] } });
+  await run(() => api().importTables(p.id, [t('main.claims.applicants', [{ column: 'email', tag: 'class.email_address' }]), t('main.claims.rates', [])]));
+  const d = (n) => sys(p.id).datasets.find((x) => x.uc?.name === n);
+  assert.equal(d('main.claims.applicants').personal, true);
+  assert.equal(d('main.claims.applicants').personalFrom, 'Unity Catalog tags');
+  assert.deepEqual(d('main.claims.applicants').uc.personal.tagged, [{ column: 'email', tag: 'class.email_address' }]);
+  assert.equal(d('main.claims.rates').personal, false, 'name hints alone never mark a dataset as personal');
+  // the tag is removed in the catalog: the dataset stays personal until a person decides otherwise
+  await run(() => api().importTables(p.id, [t('main.claims.applicants', [])]));
+  assert.equal(d('main.claims.applicants').personal, true);
+});
 console.log(JSON.stringify(results, null, 1));
 process.exit(results.every((x) => x.ok) ? 0 : 1);

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { FRAMEWORKS, SELECTABLE_FRAMEWORKS, TIER_ORDER, PRINCIPLES, PRINCIPLE_IDS, PROFILE_QUESTIONS, TIER_CUTOFFS, cutoffsFor, scaleFor } from '../data/frameworks.js';
 import { LEVEL_NAMES, LEVEL_SCORES } from '../data/questionBank.js';
 import { ROLES, STAGES, CORE_RULE, GATE_STAGES } from '../data/lifecycle.js';
+import { evidenceCurrent, autoMaxAge } from '../data/freshness.js';
 import { ADAPTIVE_SHARE } from '../engine/engine.js';
 import { Panel, Pill, TierBadge, fmtDate, useShowMore } from '../components/ui.jsx';
 import { useStore, waitingOn } from '../store/store.jsx';
@@ -31,7 +32,7 @@ export function ReviewQueue({ nav }) {
               <tbody>
                 {shownRows.map((s) => {
                   const rec = s.stages[s.stage]; const st = STAGES[s.stage - 1];
-                  const ev = st.evidence.filter((i) => rec.evidence[i]).length;
+                  const ev = st.evidence.filter((i) => evidenceCurrent(rec.evidence[i], { maxAgeDays: autoMaxAge(state.settings) })).length;
                   return (
                     <tr key={s.id} className="click" onClick={() => nav(`/product/${s.id}`)}>
                       <td><b style={{ fontWeight: 500 }}>{s.name}</b></td>
@@ -189,6 +190,7 @@ export function Methodology() {
             <li>The type of AI is rated by how it is used: one step lower when a person makes every decision, one step higher when outputs take effect without review. Agents and biometric identification stay at the top rating.</li>
             <li>Controls lower a principle's risk by up to 35%, principle by principle. A principle earns no credit while one of its critical controls is not yet in place.</li>
             <li>Control credit is suspended while an incident is open, a high-priority action is overdue, or a model version in the registry has not been approved.</li>
+            <li>Evidence and checks read from a connected model registry (Databricks or MLflow) are marked "auto-verified" with the day they were read. They count for {autoMaxAge(state.settings)} days; after that they are shown as out of date and are not counted until the registry is checked again. Evidence people attach does not expire.</li>
             <li>Products assessed before these rules keep the earlier method (plain averages, one overall control credit, cut-offs by law) until they are re-assessed, so a confirmed result can always be reproduced.</li>
           </ul>
         </Panel>

@@ -1,6 +1,7 @@
 // Model registry panel on the AI card: connect MLflow or Databricks Unity Catalog with a read-only token, see the
 // registered versions and their metrics, and turn a new version into a change review.
-import { pendingVersions, compareMetrics } from '../engine/governance.js';
+import { pendingVersions, compareMetrics, cardVersion, trainingTables, versionDiff, pullState, autoMaxAge } from '../engine/governance.js';
+import { registryVersion } from '../data/card.js';
 import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertTriangle, CheckCircle2, ChevronDown, FlaskConical, Link2, Loader2, PlugZap, RefreshCw, Settings2, Unplug } from 'lucide-react';
 import { cloud } from '../lib/cloud.js';
@@ -70,6 +71,8 @@ export default function RegistryPanel({ s }) {
   const alerts = pendingVersions(s).filter((a) => !a.raised || s.stage !== 8).slice(-3).reverse();
   const underReview = s.stage === 8 ? pendingVersions(s).filter((a) => a.raised).at(-1) : null;
   const approved = (s.approvedVersions || []).at(-1);
+  const maxAge = autoMaxAge(store.state?.settings);
+  const fresh = pullState(c?.lastSync, { maxAgeDays: maxAge });
   return (
     <Panel title={<span className="row" style={{ gap: 6 }}><PlugZap size={15} /> Model registry</span>}
       sub="Versions and metrics come straight from where the model is registered. A new version in production opens a change review."
@@ -109,8 +112,8 @@ export default function RegistryPanel({ s }) {
           <dl className="kv small">
             <dt>Registry</dt><dd>{KIND[c.kind] || c.kind}</dd>
             <dt>Model</dt><dd className="mono">{c.model}</dd>
-            <dt>Latest version</dt><dd><b>{c.latest || '—'}</b>{s.card?.modelVersion && c.latest && String(s.card.modelVersion) !== String(c.latest) ? <Pill tone="warn">Card says {s.card.modelVersion}</Pill> : null}</dd>
-            <dt>Last checked</dt><dd>{c.lastSync ? new Date(c.lastSync).toLocaleString('en-GB') : 'Never'}</dd>
+            <dt>Latest version</dt><dd><b>{c.latest || '—'}</b>{s.card?.modelVersion && c.latest && String(cardVersion(s.card.modelVersion)) !== String(c.latest) ? <Pill tone="warn">Card says {s.card.modelVersion}</Pill> : null}</dd>
+            <dt>Last checked</dt><dd>{c.lastSync ? new Date(c.lastSync).toLocaleString('en-GB') : 'Never'}{c.lastSync && fresh.expired ? <Pill tone="warn">Out of date</Pill> : null}</dd>
             {approved && <><dt>Approved version</dt><dd><b>{approved.version}</b> <span className="mute">at stage {approved.stage} on {fmtDate(approved.at)}{c.latest != null && String(c.latest) !== String(approved.version) ? '. The registry has moved on since.' : ''}</span></dd></>}
           </dl>
           {underReview && <div className="verdict"><AlertTriangle size={18} aria-hidden /><div className="small"><b>Version {underReview.version} is under change review (stage 8)</b> It clears here once the change is approved.</div></div>}
@@ -132,6 +135,8 @@ export default function RegistryPanel({ s }) {
               </tbody>
             </table>
           )}
+          {c.lastSync && fresh.expired && <p className="xs mute">The registry was last read more than {maxAge} days ago. Checks and evidence that rely on it are shown as out of date until you click "Check now".</p>}
+          <HowMade s={s} />
           {cfg && (
             <div className="stack" style={{ borderTop: '1px solid var(--line-2)', paddingTop: 10 }}>
               <AdvancedFields v={cfg} set={(p) => setCfg({ ...cfg, ...p })} kind={c.kind} open />
@@ -150,6 +155,45 @@ export default function RegistryPanel({ s }) {
         </div>
       )}
     </Panel>
+  );
+}
+
+const short = (v) => (v == null ? 'not set' : String(v));
+const fig = (x) => Math.round(x * 10000) / 10000;
+
+// How the version in use was made, as logged on its training run: when, by whom, from which code, with which
+// parameters and on which data. Then what changed against the version approved last, if the registry has moved on.
+function HowMade({ s }) {
+  const c = s.connector; const v = registryVersion(c); const run = v?.run;
+  if (!run) return null;
+  const tt = trainingTables(c);
+  const params = Object.entries(run.params || {});
+  const from = [...(s.approvedVersions || [])].reverse().find((a) => String(a.version) !== String(v.version))?.version
+    ?? (c.versions || []).find((o) => (+o.version || 0) < (+v.version || 0))?.version;
+  const diff = from != null ? versionDiff(c, from, v.version) : null;
+  const changed = diff && (diff.metrics.length || diff.params.length || diff.data.length || diff.code.changed);
+  return (
+    <div className="stack" style={{ borderTop: '1px solid var(--line-2)', paddingTop: 10 }}>
+      <p className="xs mute" style={{ margin: 0 }}>How version {v.version} was made, from its training run</p>
+      <dl className="kv small">
+        {run.startedAt && <><dt>Trained</dt><dd>{fmtDate(run.startedAt)}{run.user ? ` by ${run.user}` : ''}</dd></>}
+        {(run.code?.commit || run.code?.source) && <><dt>Code</dt><dd>{run.code.source ? <span className="mono">{run.code.source}</span> : null}{run.code.commit ? <> {run.code.source ? '· ' : ''}commit <span className="mono">{run.code.commit.slice(0, 12)}</span></> : null}{run.code.branch ? ` (${run.code.branch})` : ''}</dd></>}
+        {run.flavors?.length > 0 && <><dt>Library</dt><dd>{run.flavors.join(', ')}</dd></>}
+        {params.length > 0 && <><dt>Parameters</dt><dd className="xs">{params.slice(0, 12).map(([k, x]) => `${k}=${x}`).join(' · ')}{params.length > 12 ? ` · and ${params.length - 12} more` : ''}</dd></>}
+        <dt>Training data</dt><dd>{tt.tables.length ? tt.tables.map((t) => <span key={t.name} className="tag mono" style={{ marginRight: 6 }} title={t.via.includes('run') ? 'Logged on the training run' : 'Packaged with the model version'}>{t.name}{t.digest ? ` · ${t.digest.slice(0, 8)}` : ''}</span>)
+          : <span className="mute">No catalog table is recorded on the run. Log the training data with mlflow.log_input so it appears here.</span>}
+          {tt.other > 0 && <span className="xs mute"> {tt.other} other input{tt.other === 1 ? '' : 's'} not from the catalog.</span>}</dd>
+      </dl>
+      {changed ? (
+        <div className={`verdict ${diff.metrics.some((m) => m.worse) ? 'warn' : ''}`}><AlertTriangle size={18} aria-hidden /><div className="small"><b>Version {diff.to} compared with version {diff.from}</b>
+          <ul className="list-plain xs" style={{ margin: '4px 0 0' }}>
+            {diff.metrics.length > 0 && <li>Metrics: {diff.metrics.map((m) => `${m.name} ${fig(m.from)} to ${fig(m.to)}${m.worse ? ' (lower)' : ''}`).join(', ')}</li>}
+            {diff.params.length > 0 && <li>Parameters: {diff.params.slice(0, 10).map((p) => `${p.name} ${short(p.from)} to ${short(p.to)}`).join(', ')}</li>}
+            {diff.data.length > 0 && <li>Training data: {diff.data.map((d) => `${d.table}${d.from == null ? ' (new)' : d.to == null ? ' (no longer used)' : ' (different data version)'}`).join(', ')}</li>}
+            {diff.code.changed && <li>Code version changed</li>}
+          </ul></div></div>
+      ) : null}
+    </div>
   );
 }
 

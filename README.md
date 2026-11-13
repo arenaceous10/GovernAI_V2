@@ -210,8 +210,44 @@ All four use the product's single model-registry connection (address and a seale
   Annex IV draft under post-market monitoring.
 - **Unity Catalog tables** (Data and lineage tab): owner, description, columns, upstream and downstream tables and
   monitoring status per table. Lineage comes from `system.access.table_lineage` when a SQL warehouse ID is set,
-  otherwise from Databricks' lineage endpoint, which is not in its public API reference. Use, classification, personal
-  data and steward stay as people set them.
+  otherwise from Databricks' lineage endpoint, which is not in its public API reference. Use, classification and
+  steward stay as people set them.
+
+**What is read about how the model was made**
+
+- **Training run** (AI card, "How version N was made"): for the newest three versions, the MLflow run behind each one:
+  when and by whom it was trained, the code (notebook or script path, git commit, branch), the library, up to 25
+  parameters and the datasets logged with `mlflow.log_input`. Parameters whose names look like credentials are never
+  read, and a repository address is kept without any user name or token.
+- **Training tables**: the catalog tables named by those datasets, plus the tables the Unity Catalog model version is
+  packaged with (`model_version_dependencies`, feature tables). Tables that are not registered under "Data and
+  lineage" are offered for import and flagged to the reviewer.
+- **Version comparison**: the version in use against the version approved last (or the one before it): metrics,
+  parameters, training data version and code.
+- **Personal-data tags** (Data and lineage tab): columns tagged in Unity Catalog as personal or sensitive, read from
+  `system.information_schema.column_tags` (needs the SQL warehouse ID). A tag counts when it is one of Databricks'
+  classification tags (`class.*`) or its name or value says so (`pii`, `personal`, `sensitive`, `phi`, `restricted`
+  and similar); `pii = false` does not. A dataset with tagged columns is marked as personal data. This is only ever
+  switched on from tags, never off, and when tags cannot be read the screen says "not read", not "none". Column masks
+  are listed, and untagged columns whose names suggest personal data are shown as hints only.
+- **Differences for the reviewer**: the risk profile says no personal data but columns are tagged; a dataset is marked
+  "no personal data" but has tagged columns; the model was trained on tables that are not registered; lineage is
+  answered as documented but the catalog shows none. Nothing is changed automatically.
+
+**Auto-verified evidence, and when it expires**
+
+- On the stage being worked on, evidence items the registry can speak to show "Attach from Databricks": configuration
+  and version records, evaluation report, fairness by group, regression results, monitoring reports, dataset lineage.
+  The statement is built by the app from the stored read (never typed by the user), names the facts and carries the
+  read date. It is marked "Auto-verified from Databricks, read <date>". It never replaces a file or link a person
+  attached. Only facts the registry showed are offered; a missing fact offers nothing.
+- Checks the registry confirms carry the same mark and date. The tick always stays with the client.
+- A read counts as current for 30 days (Settings: "Days a registry read stays current", 1 to 365). After that the
+  item is shown as "Out of date", is no longer counted in the stage figures, and the reviewer is told. "Check now" on
+  the AI card and "Refresh from Databricks" on the item make it current again. A stage that is already approved is
+  judged on its approval day, so what was current then stays part of the record. Evidence people attach never expires.
+- The registry opens at stage 4, so these reads serve stages 4 to 8 and production. The data stage (3) is completed
+  before a registry can be connected; its lineage item is offered only if that stage is still open.
 
 SQL statements run on the client's SQL warehouse (their compute). Table names go in as parameters or quoted
 identifiers, never pasted into SQL text.
@@ -320,6 +356,7 @@ node tests/e2e/operations.cjs              # system health, error reports, backu
 N=1000 node tests/e2e/scale.cjs            # timings with a large portfolio
 node tests/e2e/clients.cjs                 # client administration
 node tests/e2e/proof.cjs                   # record, signed packs, public check, Word drafts, registry, operations, branding
+node tests/e2e/databricks.cjs              # training run, training tables, personal-data tags, auto-verified evidence and its expiry
 node tests/e2e/withdraw.cjs                # withdrawal request, decision, archive, restore, permanent deletion
 ```
 

@@ -10,7 +10,7 @@ import { removeEvidence } from '../lib/files.js';
 import { requiredApprovals, nextStage, stageOf, ROLES } from '../data/lifecycle.js';
 import { TIERS, SELECTABLE_FRAMEWORKS } from '../data/frameworks.js';
 import { rescore, buildActions, controlGaps, effectiveAnswers, isStaged, isProvisional, scoringOf } from '../engine/engine.js';
-import { breachSignals, goLiveBlockers, conditionAction, approvedVersionEntry, bulkTickable, INCIDENT_SEVERITY, SERIOUS_KINDS } from '../engine/governance.js';
+import { breachSignals, goLiveBlockers, conditionAction, approvedVersionEntry, bulkTickable, autoEvidence, autoMaxAge, INCIDENT_SEVERITY, SERIOUS_KINDS } from '../engine/governance.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
 import { buildControlQuestions } from '../lib/buildQuestions.js';
 import { registryOpen } from '../lib/registryStage.js';
@@ -582,6 +582,28 @@ export function StoreProvider({ children, standalone = null }) {
         const rec = x.stages[n] || newStage();
         return { ...x, stages: { ...x.stages, [n]: { ...rec, evidence: { ...rec.evidence, [item]: value } } } };
       }, value ? 'Evidence attached' : 'Evidence removed', `Stage ${n}: ${item}${value?.file ? ` (${value.file})` : ''}`),
+      // Attach what the model registry showed as evidence for one item. The text is built here from the stored read,
+      // never taken from the caller, and carries the read date so it can expire. Nothing is attached from an old read.
+      attachAuto: (id, n, item) => {
+        if (!CAN.work(state.role)) return 'Only the client can attach evidence';
+        const x = state.systems.find((y) => y.id === id);
+        if (!x || !workable(x, n) || !stageOf(n).evidence.includes(item)) return 'This stage cannot be changed now';
+        const fact = autoEvidence(x, { maxAgeDays: autoMaxAge(state.settings) })[item];
+        if (!fact) return 'The registry has nothing for this item';
+        const cur = x.stages?.[n]?.evidence?.[item];
+        if (cur && !cur.auto && (cur.file || cur.ref)) return 'Remove the evidence already attached to this item first';
+        if (fact.expired) return 'The registry was last read too long ago: click "Check now" on the AI card first';
+        updateSystem(id, (y) => {
+          if (!workable(y, n)) return y;
+          const f = autoEvidence(y, { maxAgeDays: autoMaxAge(state.settings) })[item];
+          if (!f || f.expired) return y;
+          const rec = y.stages[n] || newStage();
+          const had = rec.evidence?.[item];
+          if (had && !had.auto && (had.file || had.ref)) return y;
+          return { ...y, stages: { ...y.stages, [n]: { ...rec, evidence: { ...rec.evidence, [item]: { ref: f.text, file: '', at: nowIso(), auto: { source: f.source, at: f.at, version: f.version } } } } } };
+        }, `Evidence attached from ${fact.source}`, `Stage ${n}: ${item} (read ${String(fact.at).slice(0, 10)})`);
+        return '';
+      },
       submitStage: (id, n, note) => CAN.work(state.role) && updateSystem(id, (x) => {
         if (!workable(x, n) || stageBlockers(x, state.settings.checklistRules).length) return x;
         return { ...x, updatedAt: nowIso(), stages: { ...x.stages, [n]: { ...x.stages[n], status: 'submitted', note, submittedAt: nowIso(), approvals: {}, returnNote: '', log: [...(x.stages[n]?.log || []), { at: nowIso(), who: 'client', outcome: 'Submitted', comment: note }] } } };
@@ -665,10 +687,15 @@ export function StoreProvider({ children, standalone = null }) {
           if (!t || t.error) continue;
           const i = ds.findIndex((d) => d.uc?.name === t.name || d.name === t.name);
           const prev = i >= 0 ? ds[i] : { id: `ds-${Math.random().toString(36).slice(2, 8)}`, role: 'Training', classification: 'Internal', personal: false, steward: '' };
+          // Columns tagged as personal or sensitive in the catalog mark the dataset as holding personal data. It is
+          // only ever switched on from tags, never off: the absence of a tag proves nothing.
+          const tagged = (t.personal?.tagged || []).length > 0;
           const next = { ...prev, name: prev.name || t.name, sourceSystem: 'Databricks Unity Catalog', owner: t.owner || prev.owner || '',
+            personal: tagged ? true : !!prev.personal, ...(tagged && !prev.personal ? { personalFrom: 'Unity Catalog tags' } : {}),
             catalogued: true, lineage: (t.upstream?.length || 0) + (t.downstream?.length || 0) > 0 || !!prev.lineage, qualityChecked: !!t.monitor || !!prev.qualityChecked,
             uc: { name: t.name, comment: t.comment, type: t.type, format: t.format, columns: t.columns, createdBy: t.createdBy, updatedAt: t.updatedAt,
-              upstream: t.upstream || [], downstream: t.downstream || [], lineageSource: t.lineageSource, monitor: t.monitor, readAt: nowIso() } };
+              upstream: t.upstream || [], downstream: t.downstream || [], lineageSource: t.lineageSource, monitor: t.monitor, readAt: nowIso(),
+              personal: t.personal ? { tagsRead: !!t.personal.tagsRead, tagged: (t.personal.tagged || []).slice(0, 40), masked: (t.personal.masked || []).slice(0, 40), hints: (t.personal.hints || []).slice(0, 40) } : (prev.uc?.personal || null) } };
           if (i >= 0) ds[i] = next; else ds.push(next);
         }
         return { ...x, datasets: ds };
@@ -699,8 +726,10 @@ export function StoreProvider({ children, standalone = null }) {
           return { ...y, stage: 8, rounds: archiveRound(y, 8), stages: { ...y.stages, 8: newStage() }, events: [...(y.events || []), { at: nowIso(), kind: 'change', text, auto: true, version: String(result.latest) }] };
         })();
         // A version nobody has approved yet is a breach signal: re-score so the product shows it straight away.
-        return fresh && out !== x ? settle(out, s.settings.cutoffs) : out; }, fresh ? (canRaise ? 'Change raised' : 'New model version found') : driftNew ? 'Drift detected' : null,
-        fresh ? `Version ${result.latest} in ${x0.connector.model}` : driftNew ? `${dr.drifted.length} column${dr.drifted.length === 1 ? '' : 's'} drifted in ${result.monitoring.table}: ${dr.drifted.map((d) => d.column).slice(0, 5).join(', ')}` : undefined);
+        return fresh && out !== x ? settle(out, s.settings.cutoffs) : out; }, // A read that finds nothing new is logged too: its date is what auto-verified evidence and checks rest on.
+        fresh ? (canRaise ? 'Change raised' : 'New model version found') : driftNew ? 'Drift detected' : 'Registry checked',
+        fresh ? `Version ${result.latest} in ${x0.connector.model}` : driftNew ? `${dr.drifted.length} column${dr.drifted.length === 1 ? '' : 's'} drifted in ${result.monitoring.table}: ${dr.drifted.map((d) => d.column).slice(0, 5).join(', ')}`
+          : `${x0.connector.model}: ${result.latest ? `version ${result.latest}` : 'no version'}, nothing new`);
         return fresh ? (canRaise ? 'raised' : 'found') : driftNew ? 'drift' : 'same';
       },
       // New action, by the client or as a requirement from the governance team (e.g. on a control gap).

@@ -7,7 +7,7 @@ import { geoName } from '../data/countries.js';
 import { STAGES, stageOf, requiredApprovals, ROLES, STAGE_STATUS, GATE_STAGES, ON_DEMAND, phaseOf } from '../data/lifecycle.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
 import { sectionOf, sectionOrder, isStaged, isProvisional, controlGaps } from '../engine/engine.js';
-import { stageControlGaps, evidenceReuse, registryChecks, incidentClocks, breachSignals, bulkTickable, legalByLaw, INCIDENT_SEVERITY, SERIOUS_KINDS } from '../engine/governance.js';
+import { stageControlGaps, evidenceReuse, registryChecks, incidentClocks, breachSignals, bulkTickable, legalByLaw, autoEvidence, autoMismatch, evidenceCurrent, autoMaxAge, recordAsOf, databricksFlags, trainingTables, INCIDENT_SEVERITY, SERIOUS_KINDS } from '../engine/governance.js';
 import { controlFor, itemState, isMandatory, validReason, controlStatus, stageCompletion, SKIP_REASONS, MIN_REASON, COMPASS, COMPASS_IDS } from '../data/controls.js';
 import { downloadReport } from '../engine/report.js';
 import { downloadDeck } from '../engine/deck.js';
@@ -50,13 +50,18 @@ async function openFile(v, setErr) {
 // A web link inside a longer reference ("DPIA v3: https://..."), so it can still be opened in one click.
 const linkIn = (v) => (String(v || '').match(/https?:\/\/[^\s<>"'()[\]]{4,}/i) || [])[0] || '';
 
-export function EvidenceItem({ item, value, editable, onSave, systemId, stage }) {
+// `auto` is what the model registry can show for this item (see autoEvidence); `current` is false when evidence that
+// was attached automatically has gone out of date.
+export function EvidenceItem({ item, value, editable, onSave, systemId, stage, auto = null, current = true, onAuto = null }) {
   const [open, setOpen] = useState(false);
   const [ref, setRef] = useState(value?.ref || '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const has = value && (value.ref || value.file);
   const stored = hasFile(value);
+  const isAuto = !!(has && value.auto);
+  const canAuto = editable && onAuto && auto && !auto.expired && (!has || isAuto);
+  const newer = isAuto && auto && auto.at !== value.auto.at;
 
   const upload = async (f) => {
     setBusy(true); setErr('');
@@ -80,7 +85,10 @@ export function EvidenceItem({ item, value, editable, onSave, systemId, stage })
     <div className="ev-row">
       <div style={{ minWidth: 0 }}>
         <div>{item}</div>
-        {has && !open && (
+        {isAuto && !open && (
+          <div className="ev-links"><span className="xs mute"><Database size={11} /> {value.ref}</span></div>
+        )}
+        {has && !isAuto && !open && (
           <div className="ev-links">
             {value.file && (stored
               ? <button type="button" className="linkbtn xs" onClick={() => openFile(value, setErr)} title="Open file"><Paperclip size={11} /> {value.file}{value.size ? <span className="mute"> · {fmtSize(value.size)}</span> : null} <ExternalLink size={11} /></button>
@@ -102,11 +110,16 @@ export function EvidenceItem({ item, value, editable, onSave, systemId, stage })
             <button type="button" className="btn ghost sm" disabled={busy} onClick={() => { setOpen(false); setErr(''); }}>Cancel</button>
           </div>
         )}
+        {editable && auto?.expired && (!has || (isAuto && !current)) && <div className="xs mute" style={{ marginTop: 4 }}>{auto.source} can show this, but it was last read on {fmtDate(auto.at)}. Click "Check now" on the AI card, then attach it from here.</div>}
         {err && <div className="xs" role="alert" style={{ color: 'var(--bad)', marginTop: 4 }}>{err}</div>}
       </div>
       <div className="row" style={{ gap: 6 }}>
-        {has ? <Pill tone="good">Attached</Pill> : <Pill>Not attached</Pill>}
-        {editable && !open && <button type="button" className="btn sm" onClick={() => { setRef(value?.ref || ''); setErr(''); setOpen(true); }}>{has ? 'Change' : 'Attach'}</button>}
+        {isAuto ? (current
+          ? <Pill tone="good">Auto-verified from {value.auto.source || 'the registry'} · read {fmtDate(value.auto.at)}</Pill>
+          : <Pill tone="warn">Out of date · read {fmtDate(value.auto.at)}</Pill>)
+          : has ? <Pill tone="good">Attached</Pill> : <Pill>Not attached</Pill>}
+        {canAuto && !open && (!isAuto || newer || !current) && <button type="button" className="btn sm" title={auto.text} onClick={() => { const e = onAuto(); if (e) setErr(e); else toast(`Attached from ${auto.source}`); }}><Database size={13} /> {isAuto ? `Refresh from ${auto.source}` : `Attach from ${auto.source}`}</button>}
+        {editable && !open && !isAuto && <button type="button" className="btn sm" onClick={() => { setRef(value?.ref || ''); setErr(''); setOpen(true); }}>{has ? 'Change' : 'Attach'}</button>}
         {editable && has && !open && <button type="button" className="btn ghost sm" aria-label={`Remove evidence for ${item}`} onClick={remove}><X size={14} /></button>}
       </div>
     </div>
@@ -118,20 +131,26 @@ const WHO = { client: 'Client', assessor: 'Governance reviewer', lead: 'Governan
 
 // Decision panel for the reviewer or lead whose sign-off is needed.
 function ReviewBox({ s, n, rec }) {
-  const { role, reviewStage } = useStore();
+  const { role, reviewStage, state } = useStore();
   const [comment, setComment] = useState('');
   const [internal, setInternal] = useState('');
+  const maxAgeDays = autoMaxAge(state.settings);
   const tier = s.assessment.results.tier;
   const need = requiredApprovals(n, tier);
   const waiting = waitingOn(s);
   const mySlot = waiting.includes(role) ? role : (role === 'lead' && waiting.includes('assessor') && !need.includes('lead') ? 'lead' : null);
   if (!mySlot) return null;
   const st = stageOf(n);
-  const done = st.checklist.filter((i) => rec.checklist[i]).length + st.evidence.filter((i) => rec.evidence[i]).length;
+  const done = st.checklist.filter((i) => rec.checklist[i]).length + st.evidence.filter((i) => evidenceCurrent(rec.evidence[i], { maxAgeDays })).length;
   const skips = st.checklist.filter((i) => rec.skipped?.[i]);
   const reuse = evidenceReuse(rec.evidence);
-  const reg = registryChecks(s);
+  const reg = registryChecks(s, { maxAgeDays });
   const unconfirmed = st.checklist.filter((i) => rec.checklist[i] && reg[i] && !reg[i].ok);
+  const stale = st.checklist.filter((i) => rec.checklist[i] && reg[i]?.ok && reg[i].expired);
+  const autoEv = st.evidence.filter((i) => rec.evidence[i]?.auto);
+  const oldEv = autoEv.filter((i) => !evidenceCurrent(rec.evidence[i], { maxAgeDays }));
+  const dbx = databricksFlags(s);
+  const changedEv = autoMismatch(s, rec);
   const a = s.assessment;
   const gaps = stageControlGaps(n, a.questions, a.answers, a.review);
   const followUps = n === 6 ? (s.actions || []).filter((k) => k.source === 'condition' && Number(k.stage) < 6) : [];
@@ -145,6 +164,10 @@ function ReviewBox({ s, n, rec }) {
       {followUps.length > 0 && <div className="callout small"><b>Conditions and override follow-ups from earlier stages:</b> {followUps.map((k) => `${k.action} [${k.status}]`).join(' · ')}. They were closed by the client: check each one was really met.</div>}
       {reuse.length > 0 && <div className="callout warn small"><b>The same evidence is attached to several items.</b> {reuse.map((g) => `"${g.label}" is used for ${g.count} items`).join('; ')}. Check that it really covers each one.</div>}
       {unconfirmed.length > 0 && <div className="callout warn small"><b>{unconfirmed.length} ticked check{unconfirmed.length > 1 ? 's are' : ' is'} not confirmed by the model registry.</b> {unconfirmed.map((i) => reg[i].note).join('. ')}.</div>}
+      {stale.length > 0 && <div className="callout warn small"><b>{stale.length} ticked check{stale.length > 1 ? 's rely' : ' relies'} on a registry read from {fmtDate(reg[stale[0]].at)}, more than {maxAgeDays} days ago.</b> Ask the client to click "Check now" on the AI card, or use "Check now" yourself, before you rely on it.</div>}
+      {autoEv.length > 0 && <div className="callout small"><b>{autoEv.length} evidence item{autoEv.length > 1 ? 's were' : ' was'} attached automatically from the model registry</b> ({autoEv.join('; ')}). {oldEv.length > 0 ? <b>{oldEv.length} {oldEv.length > 1 ? 'are' : 'is'} out of date and not counted.</b> : 'They state what the registry showed on the read date; they are not a document someone wrote.'}</div>}
+      {changedEv.length > 0 && <div className="callout warn small"><b>{changedEv.length} automatic evidence item{changedEv.length > 1 ? 's no longer match' : ' no longer matches'} what the model registry shows now.</b> {changedEv.map((m) => `${m.item}: ${m.reason === 'gone' ? 'the registry no longer shows this' : `the registry now says "${m.now}"`}`).join(' ')} Ask the client to refresh the item, or return the stage.</div>}
+      {dbx.length > 0 && <div className="callout warn small"><b>What Databricks shows differs from what was declared.</b><ul className="list-plain" style={{ margin: '4px 0 0' }}>{dbx.map((f) => <li key={f.id}>{f.text}</li>)}</ul></div>}
       <Field label="Comment to the client" hint={(n === 6 || GATE_STAGES.includes(n)) ? 'A condition becomes a high-priority action due in 30 days; conditions from earlier gates must be closed before go-live.' : undefined}><textarea className="input" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Needed to return or add conditions" /></Field>
       <Field label={<span className="row" style={{ gap: 6 }}><Lock size={13} /> Internal note</span>} hint="Only the governance team sees this."><textarea className="input internal" rows={2} value={internal} onChange={(e) => setInternal(e.target.value)} /></Field>
       <div className="decision-actions">
@@ -219,7 +242,8 @@ function CheckItem({ item, rec, editable, mandatory, reg, onToggle, onSkip, onUn
         <span className="ci-tags">
           <span className={`ci-tag ${mandatory ? 'must' : ''}`}>{mandatory ? 'Mandatory' : 'Optional'}</span>
           <span className="ci-tag ctl" title={`${c.name} · ${c.family} · ${c.type}`}>{c.id}</span>
-          {reg && <span className={`ci-tag ${reg.ok ? 'reg-ok' : 'reg-no'}`} title={reg.note}>{reg.ok ? 'Confirmed by registry' : 'Not confirmed by registry'}</span>}
+          {reg && <span className={`ci-tag ${reg.ok && !reg.expired ? 'reg-ok' : 'reg-no'}`} title={`${reg.note}${reg.at ? `. Read ${fmtDate(reg.at)}.` : ''}`}>
+            {reg.ok && !reg.expired ? `Auto-verified from ${reg.source} · read ${fmtDate(reg.at)}` : reg.ok ? `Out of date · read ${fmtDate(reg.at)}` : `Not confirmed by ${reg.source}`}</span>}
         </span>
         {editable && !mandatory && st === 'open' && !open && <button type="button" className="btn ghost sm ci-skip-btn" onClick={() => setOpen(true)} aria-label={`Skip with a reason: ${item}`}><SkipForward size={13} /> Skip with reason</button>}
         {editable && st === 'skipped' && <button type="button" className="btn ghost sm" onClick={onUnskip}>Undo skip</button>}
@@ -250,8 +274,8 @@ function CheckItem({ item, rec, editable, mandatory, reg, onToggle, onSkip, onUn
 
 // Completion scale for one stage: one bar from 0 to 100%, split by mandatory checks, optional checks (ticked or
 // skipped) and evidence, with what is still needed before it can be submitted.
-function StageScale({ st, rec, tier, rules, blockers, working }) {
-  const c = stageCompletion(st, rec, tier, rules);
+function StageScale({ st, rec, tier, rules, blockers, working, maxAgeDays }) {
+  const c = stageCompletion(st, rec, tier, rules, maxAgeDays);
   const w = (x) => `${c.total ? (x / c.total) * 100 : 0}%`;
   const ready = working && blockers.length === 0;
   const parts = [
@@ -297,7 +321,7 @@ function ChecklistView({ st, rec, editable, tier, rules, reg = {}, onToggle, onA
 }
 
 function StageView({ s, n }) {
-  const { role, toggleCheck, checkAll, skipCheck, unskipCheck, setEvidence, submitStage, override, startEvent, state } = useStore();
+  const { role, toggleCheck, checkAll, skipCheck, unskipCheck, setEvidence, attachAuto, submitStage, override, startEvent, state } = useStore();
   const rules = state.settings.checklistRules || {};
   const tier = s.assessment.results.tier;
   const [howOpen, setHowOpen] = useState(false);
@@ -305,7 +329,10 @@ function StageView({ s, n }) {
   const [reason, setReason] = useState('');
   const [event, setEvent] = useState({ kind: '', text: '', severity: 'significant', seriousKind: 'general', personalData: false });
   const st = stageOf(n);
-  const reg = registryChecks(s);
+  const maxAgeDays = autoMaxAge(state.settings);
+  // What the registry confirms is about today, so it is shown on the stage being worked on, not on closed ones.
+  const reg = n === s.stage ? registryChecks(s, { maxAgeDays }) : {};
+  const auto = n === s.stage ? autoEvidence(s, { maxAgeDays }) : {};
   const fws = s.assessment.frameworks || [];
   const legal = legalByLaw(s.assessment.profile, fws);
   const highRisk = ['high', 'unacceptable'].includes(s.assessment.results.legal?.tier);
@@ -320,8 +347,9 @@ function StageView({ s, n }) {
   const blockers = stageBlockers(s, rules);
   const total = st.checklist.length + st.evidence.length;
   const skippedN = st.checklist.filter((i) => itemState(rec, i) === 'skipped').length;
-  const doneN = st.checklist.filter((i) => rec.checklist[i]).length + skippedN + st.evidence.filter((i) => rec.evidence[i]).length;
-  const evCount = st.evidence.filter((i) => rec.evidence[i]).length;
+  const evNow = (i) => evidenceCurrent(rec.evidence[i], { asOf: recordAsOf(rec), maxAgeDays });
+  const evCount = st.evidence.filter(evNow).length;
+  const doneN = st.checklist.filter((i) => rec.checklist[i]).length + skippedN + evCount;
   const status = isCurrent || rec.status === 'approved' ? STAGE_STATUS[rec.status] : ON_DEMAND.includes(n) ? 'Only if needed' : 'Not started';
   const ph = phaseOf(n);
   return (
@@ -360,13 +388,14 @@ function StageView({ s, n }) {
         {isCurrent && rec.status === 'submitted' && role === 'client' && <div className="callout"><b>With the governance team.</b> Submitted {fmtDate(rec.submittedAt)}. You'll see their decision here.</div>}
         {working && !CAN.work(role) && <div className="callout small"><b>The client is working on this stage.</b> You can review it once they submit.</div>}
 
-        {(isCurrent || rec.status === 'approved') && <StageScale st={st} rec={rec} tier={tier} rules={rules} blockers={blockers} working={working} />}
+        {(isCurrent || rec.status === 'approved') && <StageScale st={st} rec={rec} tier={tier} rules={rules} blockers={blockers} working={working} maxAgeDays={maxAgeDays} />}
 
         <ChecklistView st={st} rec={rec} editable={canEdit} tier={tier} rules={rules} reg={reg} onToggle={(item) => toggleCheck(s.id, n, item)} onAll={() => checkAll(s.id, n, st.checklist)}
           onSkip={(item, v) => skipCheck(s.id, n, item, v)} onUnskip={(item) => unskipCheck(s.id, n, item)} />
         <Panel title="Evidence" right={<span className="count-chip num">{evCount}/{st.evidence.length}</span>}>
           {st.evidence.map((item) => (
-            <EvidenceItem key={`${n}-${item}`} item={item} value={rec.evidence[item]} editable={canEdit} systemId={s.id} stage={n} onSave={(v) => setEvidence(s.id, n, item, v)} />
+            <EvidenceItem key={`${n}-${item}`} item={item} value={rec.evidence[item]} editable={canEdit} systemId={s.id} stage={n} onSave={(v) => setEvidence(s.id, n, item, v)}
+              auto={auto[item]} current={!rec.evidence[item]?.auto || evNow(item)} onAuto={() => attachAuto(s.id, n, item)} />
           ))}
         </Panel>
       </div>
@@ -619,6 +648,9 @@ function Actions({ s }) {
 function UnityImport({ s }) {
   const { role, importTables } = useStore();
   const ucd = (s.datasets || []).filter((d) => d.uc?.name).map((d) => d.uc.name);
+  // Tables the training run and the model version name, that are not registered here yet.
+  const tt = trainingTables(s.connector);
+  const fromModel = tt.tables.map((t) => t.name).filter((t) => !ucd.includes(t));
   const [names, setNames] = useState(ucd.join('\n'));
   const [busy, setBusy] = useState(false);
   const [errs, setErrs] = useState([]);
@@ -636,15 +668,36 @@ function UnityImport({ s }) {
     finally { setBusy(false); }
   };
   return (
-    <Panel title="Import from Unity Catalog" sub={`Owner, description, columns, lineage and monitoring for each table, read from ${s.connector.host.replace(/^https:\/\//, '')}. Use, classification, personal data and steward stay as you set them.`}>
+    <Panel title="Import from Unity Catalog" sub={`Owner, description, columns, lineage, monitoring and personal-data tags for each table, read from ${s.connector.host.replace(/^https:\/\//, '')}. Use, classification and steward stay as you set them. A dataset is marked as personal data when its columns are tagged that way.`}>
+      {fromModel.length > 0 && (
+        <div className="callout small" style={{ marginBottom: 10 }}><b>Model version {tt.version} was trained on {fromModel.length} table{fromModel.length === 1 ? '' : 's'} not registered here:</b> <span className="mono">{fromModel.join(', ')}</span>.{' '}
+          <button type="button" className="linkbtn" onClick={() => setNames([...new Set([...names.split(/[\s,;]+/).filter(Boolean), ...fromModel])].join('\n'))}>Add {fromModel.length === 1 ? 'it' : 'them'} to the list</button>
+          <div className="xs mute">Read from the training run's logged datasets and the model version's dependencies{s.connector.lastSync ? ` on ${fmtDate(s.connector.lastSync)}` : ''}.</div></div>
+      )}
       <div className="row" style={{ gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <label className="field" style={{ flex: 1, minWidth: 260 }}><span>Tables (catalog.schema.table, one per line)</span>
           <textarea className="input" rows={Math.min(5, Math.max(2, names.split('\n').length))} value={names} onChange={(e) => setNames(e.target.value)} placeholder="workspace.default.applicants" /></label>
         <button className="btn primary" onClick={run} disabled={busy || !names.trim()}>{busy ? <Loader2 size={15} className="spin" /> : <Database size={15} />} {ucd.length ? 'Refresh from Unity Catalog' : 'Import tables'}</button>
       </div>
-      {!s.connector.warehouseId && <p className="xs mute" style={{ marginTop: 6 }}>Lineage comes from Databricks' lineage system table when a SQL warehouse ID is set on the AI card; without one, GovernAI tries Databricks' lineage endpoint, which is not part of its public API.</p>}
+      {!s.connector.warehouseId && <p className="xs mute" style={{ marginTop: 6 }}>Lineage comes from Databricks' lineage system table when a SQL warehouse ID is set on the AI card; without one, GovernAI tries Databricks' lineage endpoint, which is not part of its public API. Personal-data tags also need the SQL warehouse: without one they are not read.</p>}
       {errs.length > 0 && <ul className="xs bad-text" style={{ margin: '8px 0 0', paddingLeft: 16 }}>{errs.map((e) => <li key={e}>{e}</li>)}</ul>}
     </Panel>
+  );
+}
+
+// What Unity Catalog says about personal data in one table: tagged columns (counted), masked columns, and column
+// names that look personal but carry no tag (a hint to look, nothing more).
+function PersonalLine({ p }) {
+  const cols = [...new Set((p.tagged || []).map((t) => t.column))];
+  return (
+    <div className="xs uc-line" style={{ marginTop: 2 }}>
+      {!p.tagsRead ? <span className="mute">Personal-data tags not read (needs a SQL warehouse ID on the AI card).</span>
+        : cols.length ? <span><b>{cols.length} column{cols.length === 1 ? '' : 's'} tagged personal or sensitive:</b> {(p.tagged || []).slice(0, 8).map((t) => `${t.column} (${t.tag})`).join(', ')}{p.tagged.length > 8 ? '…' : ''}</span>
+          : <span className="mute">No column is tagged personal or sensitive.</span>}
+      {p.masked?.length > 0 && <span className="mute"> · masked: {p.masked.slice(0, 8).join(', ')}</span>}
+      {cols.length > 0 && cols.some((c) => !(p.masked || []).includes(c)) && <span className="mute"> · not masked: {cols.filter((c) => !(p.masked || []).includes(c)).slice(0, 8).join(', ')}</span>}
+      {p.hints?.length > 0 && <div className="mute">Untagged columns whose names suggest personal data, worth a look: {p.hints.slice(0, 8).join(', ')}</div>}
+    </div>
   );
 }
 
@@ -653,8 +706,10 @@ function DataTab({ s }) {
   const [edit, setEdit] = useState(false);
   const [d, setD] = useState(s.datasets); const [o, setO] = useState(s.outputs);
   const cov = catalogCoverage(s.datasets);
+  const flags = databricksFlags(s);
   return (
     <div className="stack">
+      {flags.length > 0 && <div className="callout warn"><b>What Databricks shows differs from what was declared.</b><ul className="list-plain small" style={{ margin: '4px 0 0' }}>{flags.map((f) => <li key={f.id}>{f.text}</li>)}</ul><div className="xs mute" style={{ marginTop: 4 }}>The reviewer sees this list too.</div></div>}
       {!edit && <UnityImport s={s} />}
       <Panel title="Lineage" right={!edit && CAN.work(role) && <button className="btn sm" onClick={() => { setD(s.datasets); setO(s.outputs); setEdit(true); }}>Edit data assets</button>}>
         <LineageGraph name={s.name} datasets={edit ? d : s.datasets} outputs={edit ? o : s.outputs} />
@@ -672,9 +727,10 @@ function DataTab({ s }) {
                 {s.datasets.map((x) => (
                   <tr key={x.id}>
                     <td><b style={{ fontWeight: 500 }}>{x.name}</b><div className="xs mute">{x.role}</div>
-                      {x.uc && <div className="xs mute uc-line">{x.uc.comment ? <>{x.uc.comment}<br /></> : null}{x.uc.columns} columns{x.uc.upstream?.length ? ` · from ${x.uc.upstream.join(', ')}` : ''}{x.uc.downstream?.length ? ` · feeds ${x.uc.downstream.join(', ')}` : ''}{x.uc.monitor ? ` · monitor ${x.uc.monitor.status.toLowerCase()}` : ''} · read {fmtDate(x.uc.readAt)}</div>}</td>
+                      {x.uc && <div className="xs mute uc-line">{x.uc.comment ? <>{x.uc.comment}<br /></> : null}{x.uc.columns} columns{x.uc.upstream?.length ? ` · from ${x.uc.upstream.join(', ')}` : ''}{x.uc.downstream?.length ? ` · feeds ${x.uc.downstream.join(', ')}` : ''}{x.uc.monitor ? ` · monitor ${x.uc.monitor.status.toLowerCase()}` : ''} · read {fmtDate(x.uc.readAt)}</div>}
+                      {x.uc?.personal && <PersonalLine p={x.uc.personal} />}</td>
                     <td className="small">{x.sourceSystem}</td>
-                    <td><span className="tag">{x.classification}</span></td>
+                    <td><span className="tag">{x.classification}</span>{x.personal && <div className="xs" style={{ marginTop: 3 }}>Personal data{x.personalFrom ? <span className="mute"> (from {x.personalFrom})</span> : null}</div>}</td>
                     <td className="small">{x.owner || '—'}</td><td className="small">{x.steward || <span className="tone-bad">None</span>}</td>
                     {['catalogued', 'lineage', 'qualityChecked'].map((k) => <td key={k}><Pill tone={x[k] ? 'good' : 'bad'}>{x[k] ? 'Yes' : 'No'}</Pill></td>)}
                   </tr>
