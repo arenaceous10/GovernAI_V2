@@ -89,6 +89,35 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
     assert(/No column is tagged personal or sensitive/.test(t), 'a table with tags read and none found says so');
     assert(!/What Databricks shows differs from what was declared/.test(t), 'the flag clears once the tables are registered');
 
+    // 3b. lineage built with one click: no table names typed, every layer walked upstream from the training tables
+    db.lineageUp = {
+      'main.claims.fnol': ['main.silver.fnol_clean', 'main.silver.policy_dim'],
+      'main.claims.features': ['main.silver.fnol_clean', 'main.silver.repairs'],
+      'main.silver.fnol_clean': ['main.bronze.claimcenter_raw', 'main.ref.loss_codes'],
+      'main.silver.policy_dim': ['main.bronze.policy_admin_raw'],
+      'main.silver.repairs': ['main.bronze.garage_api_raw'],
+      'main.bronze.claimcenter_raw': ['abfss://landing@acct.dfs.core.windows.net/claimcenter'],
+      'main.bronze.garage_api_raw': ['s3://partner-drop/garage'],
+    };
+    await p.getByRole('button', { name: 'Build lineage from Databricks' }).click(); await W(1500);
+    assert(JSON.stringify(db.lineageCalls.at(-1).slice().sort()) === JSON.stringify(['main.claims.features', 'main.claims.fnol']), 'started from the training tables: ' + JSON.stringify(db.lineageCalls));
+    t = await body();
+    assert(/Read from Databricks on .*: 9 tables and 2 file locations, up to 3 steps upstream/.test(t), 'summary of the walk: ' + (t.match(/Read from Databricks[^\n]*/) || [t.slice(0, 400)])[0] + ' | ' + JSON.stringify(db.lineageCalls));
+    const svg = p.locator('svg[aria-label^="Data lineage"]');
+    const st = await svg.innerHTML();
+    for (const h of ['Original sources', '2 steps before the inputs', '1 step before the inputs', 'Model inputs', 'AI system', 'Where outputs go']) assert(st.includes(h), 'column ' + h);
+    for (const n of ['bronze.claimcenter_raw', 'silver.fnol_clean', 'ref.loss_codes', 'silver.repairs', 'claims.fnol']) assert(st.includes(n), 'node ' + n);
+    const l = row(ID).data.lineage;
+    assert(l && l.layers === 3 && l.edges.length === 10 && l.readAt, 'stored on the product');
+    assert(db.tables.v2_audit.some((a) => a.action === 'Lineage read from Databricks' && a.target === ID), 'logged');
+    // tracing a node dims everything not connected to it
+    await svg.locator('g[role="button"][aria-label="Trace main.silver.repairs"]').click(); await W(300);
+    const dimmed = await svg.locator('g[role="button"][opacity="0.25"]').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
+    assert(dimmed.includes('Trace main.silver.policy_dim') && dimmed.includes('Trace main.bronze.claimcenter_raw'), 'unrelated tables dimmed');
+    assert(!dimmed.includes('Trace main.bronze.garage_api_raw') && !dimmed.includes('Trace main.claims.features'), 'its sources and what it feeds stay lit');
+    await p.screenshot({ path: 'e2e-shots/lineage-layers.png', fullPage: false });
+    await svg.locator('g[role="button"][aria-label="Trace main.silver.repairs"]').click(); await W(200);
+
     // 4. forty-five days later: the read is out of date and no longer counts
     const old = new Date(Date.now() - 45 * 86400000).toISOString();
     const r = row(ID);

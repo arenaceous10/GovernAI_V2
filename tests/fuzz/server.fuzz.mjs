@@ -2,7 +2,7 @@
 // registry and monitoring responses of any shape, and table names that try to inject SQL.
 import { rng, suite, short } from './lib.mjs';
 import { createServer } from 'node:http';
-import { checkHost, isPrivate, seal, unseal, readRegistry, readMonitoring, readTables, readGenAI, validTable, validWarehouse, safeFetch } from '../../src/lib/server/connector.js';
+import { walkLineage, checkHost, isPrivate, seal, unseal, readRegistry, readMonitoring, readTables, readGenAI, validTable, validWarehouse, safeFetch } from '../../src/lib/server/connector.js';
 import { readBody } from '../../src/lib/serverAuth.js';
 import { randomBytes } from 'node:crypto';
 
@@ -89,6 +89,8 @@ const junk = () => r.pick([null, 1, 'x', [], {}, { model_versions: r.pick([null,
     tags: r.pick([null, 5, [null, { key: 'mlflow.source.git.repoURL', value: r.pick(['https://u:LEAK-ME@github.com/a/b', 'javascript:alert(1)', 'x', null]) }, { key: 'mlflow.log-model.history', value: r.pick(['{', '[1]', '[{"flavors":"x"}]', '[{"flavors":{"sklearn":{}}}]', null]) }, { key: 'mlflow.source.git.commit', value: r.pick(['<script>', 'abc123', {}]) }]]) },
     inputs: r.pick([null, 'x', { dataset_inputs: r.pick([null, 'x', [null, 1, { dataset: r.pick([null, 'x', { name: r.pick([null, 'a.b.c@v2', {}, 'x'.repeat(900)]), source: r.pick([null, '{', '{"table_name":"a.b.c; DROP"}', '{"delta_table_name":"a.b.c"}', '[]']), digest: r.pick([null, {}, 'd']) }]), tags: r.pick([null, 'x', [null, { key: 'mlflow.data.context', value: {} }]]) }]]) }]) } },
   { model_version_dependencies: r.pick([null, 'x', { dependencies: r.pick([null, 'x', [null, 1, { table: r.pick([null, 'x', { table_full_name: r.pick([null, 'a.b.c', 'a.b.c`; DROP', {}]) }]) }, { function: { function_full_name: 5 } }]]) }]) },
+  { status: { state: 'SUCCEEDED' }, manifest: { schema: { columns: ['source_table_full_name', 'source_type', 'source_path', 'target_table_full_name'].map((name) => ({ name })) } },
+    result: { data_array: r.pick([null, 'x', [null, 5, ['a.b.d', 'TABLE', null, 'a.b.c'], [null, 'PATH', r.pick(['abfss://k:LEAK-ME@acct/x/y.parquet', 'javascript:alert(1)', 's3://b/f/x.csv', {}]), 'a.b.c'], ['a.b.c; DROP', 'TABLE', null, 'a.b.c'], [{}, [], 7, 'a.b.c'], ['a.b.c', 'VIEW', null, 'a.b.c']]]) } },
   { table_id: 't', columns: r.pick([null, 'x', [null, 1, { name: r.pick([null, 'email', {}, 'x'.repeat(900)]), mask: r.pick([null, 'x', {}]) }]]) },
   { status: { state: r.pick(['SUCCEEDED', 'FAILED']), error: { message: 'x' } }, result: { data_array: r.pick([null, [[1, 2]], 'x']) }, manifest: { schema: { columns: r.pick([null, [{ name: 'column_name' }]]) } } }]);
 const fakeFetch = async (url) => {
@@ -117,6 +119,12 @@ for (let i = 0; i < 1500; i++) {
   catch (e) { S.check(friendly(e), 'monitoring read fails with an internal error', e.message); }
   try { await readGenAI({ base: 'https://public.example', token: 't', experiment: r.pick(['', '/Users/x/exp', '123']), versions: [] }, { fetchImpl: fakeFetch }); }
   catch (e) { S.check(friendly(e), 'GenAI read fails with an internal error', e.message); }
+  try {
+    const lw = await walkLineage({ base: 'https://public.example', token: 't', warehouseId: r.pick(['', '2bce45dbd06434d1']), roots: ['a.b.c'] }, { fetchImpl: fakeFetch });
+    S.check(lw.nodes.length <= 80 && lw.edges.length <= 500, 'lineage walk not bounded', String(lw.nodes.length));
+    for (const n of lw.nodes) S.check(n.kind === 'path' ? /^[a-z][a-z0-9+.-]*:\/\/[^@/]+(\/[^/]*)?$/i.test(n.name) : /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(n.name), 'unsafe lineage node kept', short(n));
+    S.check(!JSON.stringify(lw).includes('LEAK-ME'), 'a credential in a path reached the lineage', '');
+  } catch (e) { S.check(friendly(e), 'lineage walk fails with an internal error', e.message); }
   try {
     const tb = await readTables({ base: 'https://public.example', token: 't', tables: ['a.b.c', 'd.e.f'], warehouseId: '2bce45dbd06434d1' }, { fetchImpl: fakeFetch });
     for (const t of tb.tables) if (!t.error) S.check(t.personal && Array.isArray(t.personal.tagged) && Array.isArray(t.personal.masked) && Array.isArray(t.personal.hints) && typeof t.personal.tagsRead === 'boolean', 'table result has no personal-data section', short(t.personal));

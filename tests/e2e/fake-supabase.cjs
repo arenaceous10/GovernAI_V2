@@ -337,6 +337,25 @@ function installApi(context, db) {
       if (row.data?.connector?.kind !== 'databricks-uc') return send(route, 400, { error: 'Connect the model to Databricks Unity Catalog on the AI card first' });
       return send(route, 200, { tables: (body.tables || []).map((n) => db.ucTables?.[n] || { name: n, error: `Table ${n} was not found, or the token cannot read it` }), notes: [] });
     }
+    if (body.action === 'lineage') {
+      if (row.data?.connector?.kind !== 'databricks-uc') return send(route, 400, { error: 'Connect the model to Databricks Unity Catalog on the AI card first' });
+      db.lineageCalls = [...(db.lineageCalls || []), body.roots];
+      if (!(body.roots || []).length) return send(route, 502, { error: 'There is no table to start from: the training run names no catalog table. Add a table name, or log the training data with mlflow.log_input.' });
+      // Walk db.lineageUp (target -> [source]) like the server does.
+      const up = db.lineageUp || {}; const nodes = new Map((body.roots || []).map((n) => [n, { name: n, kind: 'table', type: 'TABLE' }])); const edges = [];
+      let frontier = [...nodes.keys()]; let layers = 0;
+      while (frontier.length) {
+        const next = [];
+        for (const t of frontier) for (const src of up[t] || []) {
+          const path = /:\/\//.test(src);
+          if (!nodes.has(src)) { nodes.set(src, { name: src, kind: path ? 'path' : 'table', type: path ? 'PATH' : 'TABLE' }); if (!path) next.push(src); }
+          edges.push({ from: src, to: t });
+        }
+        if (edges.length) layers++;
+        frontier = next;
+      }
+      return send(route, 200, { roots: body.roots, nodes: [...nodes.values()], edges, layers, truncated: null, source: 'system.access.table_lineage', notes: [] });
+    }
     const versions = (db.registry?.versions || []).slice().sort((a, b) => +b.version - +a.version);
     return send(route, 200, { model: body.model || row.data?.connector?.model, info: db.registry?.info || {}, versions, latest: versions[0]?.version || null, genai: db.registry?.genai || null, monitoring: db.registry?.monitoring || null });
   });

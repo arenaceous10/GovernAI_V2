@@ -7,6 +7,7 @@ import { TIERS, DATA_CATEGORIES, SOURCING, SYSTEM_TYPES, ANNEX_III, PROFILE_QUES
 import { geoName } from '../data/countries.js';
 import { controlStatus } from '../data/controls.js';
 import { trainingTables } from './governance.js';
+import { lineageLayers } from './lineage.js';
 
 const t = (v) => (v == null ? '' : String(v).trim());
 const list = (xs) => (xs || []).filter(Boolean).join('; ');
@@ -64,6 +65,14 @@ const runText = (s) => {
     params.length && `parameters ${params.slice(0, 15).map(([k, x]) => `${k}=${x}`).join(', ')}`,
   ].filter(Boolean).join('; ')}`;
 };
+// The lineage walked from Databricks, layer by layer from the original sources to the model's inputs.
+const walkedText = (s) => {
+  const l = s.lineage;
+  if (!l?.nodes?.length) return '';
+  const g = lineageLayers(l, []);
+  const layers = g.columns.map((c, i) => `${i === g.columns.length - 1 ? 'model inputs' : i === 0 ? 'original sources' : `${g.columns.length - 1 - i} steps before the inputs`}: ${c.map((n) => n.name).slice(0, 12).join(', ')}${c.length > 12 ? ` and ${c.length - 12} more` : ''}`);
+  return `Lineage read from Databricks on ${dt(l.readAt)}, up to ${l.layers} steps upstream of the model's tables (${l.source || 'Unity Catalog'}). ${layers.join('; ')}${l.truncated ? '. The walk stopped early, so this is not complete' : ''}`;
+};
 const trainedOnText = (s) => {
   const tt = trainingTables(s.connector);
   return tt.tables.length ? `Model version ${tt.version} was trained on (from the registry, read ${dt(s.connector.lastSync)}): ${tt.tables.map((x) => `${x.name}${x.digest ? ` [data version ${x.digest}]` : ''}`).join(', ')}` : '';
@@ -89,7 +98,7 @@ export function annexIV(s, { client } = {}) {
     ] },
     { h: '2. Elements of the system and its development', items: [
       item('Development methods and design choices', list([card(s, 'modelName'), runText(s), stageEvidence(s, 4)]), 'Explain the model choice, alternatives considered and key design decisions (stage 4 evidence).', 'Annex IV 2(a), 2(b)'),
-      item('Data used: sources, provenance and preparation', list([...(s.datasets || []).map(datasetLine), trainedOnText(s), stageEvidence(s, 3)]), 'Register the datasets in "Data and lineage" and complete stage 3.', 'Annex IV 2(d); Art. 10'),
+      item('Data used: sources, provenance and preparation', list([...(s.datasets || []).map(datasetLine), trainedOnText(s), walkedText(s), stageEvidence(s, 3)]), 'Register the datasets in "Data and lineage" and complete stage 3.', 'Annex IV 2(d); Art. 10'),
       item('Human oversight measures', list([profileAnswer(s, 'automation') && `Level of automation: ${profileAnswer(s, 'automation')}`, card(s, 'oversight')]), 'Describe who reviews outputs and how they override or stop the system.', 'Annex IV 2(e); Art. 14'),
       item('Planned changes', (s.events || []).filter((e) => e.kind === 'change').map((e) => `${dt(e.at)}: ${e.text}`).join('; '), 'Describe changes planned in advance and how they are controlled.', 'Annex IV 2(f)'),
       item('Validation and testing', list([stageEvidence(s, 5), metricsText(s) && `Metrics: ${metricsText(s)}`, evalText(s)]), 'Complete stage 5 (testing and independent validation) and record the metrics.', 'Annex IV 2(g)'),

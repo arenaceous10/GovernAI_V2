@@ -10,6 +10,7 @@ import { removeEvidence } from '../lib/files.js';
 import { requiredApprovals, nextStage, stageOf, ROLES } from '../data/lifecycle.js';
 import { TIERS, SELECTABLE_FRAMEWORKS } from '../data/frameworks.js';
 import { rescore, buildActions, controlGaps, effectiveAnswers, isStaged, isProvisional, scoringOf } from '../engine/engine.js';
+import { cleanLineage } from '../engine/lineage.js';
 import { breachSignals, goLiveBlockers, conditionAction, approvedVersionEntry, bulkTickable, autoEvidence, autoMaxAge, INCIDENT_SEVERITY, SERIOUS_KINDS } from '../engine/governance.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
 import { buildControlQuestions } from '../lib/buildQuestions.js';
@@ -766,6 +767,18 @@ export function StoreProvider({ children, standalone = null }) {
         return ('status' in patch || 'due' in patch) && breachSignals(x).length !== breachSignals(y).length ? settle(y, s.settings.cutoffs) : y;
       }, 'Action updated', Object.entries(patch).map(([k, v]) => `${k}: ${v}`).join(', ')),
       setProductOwner: (id, owner) => CAN.work(state.role) && updateSystem(id, (x) => ({ ...x, owner }), 'Business owner changed', owner),
+      // Lineage walked upstream in Databricks from the model's own tables (see walkLineage). Stored cut to size; a
+      // registered table with recorded sources counts as having documented lineage (switched on, never off).
+      saveLineage: (id, raw) => {
+        if (!CAN.work(state.role)) return 'Only the client can update the data assets';
+        const l = cleanLineage(raw, nowIso());
+        if (!l) return 'Nothing was read';
+        updateSystem(id, (x) => {
+          const fed = new Set(l.edges.map((e) => e.to));
+          return { ...x, lineage: l, datasets: (x.datasets || []).map((d) => (d.uc?.name && fed.has(d.uc.name) && !d.lineage ? { ...d, lineage: true } : d)) };
+        }, 'Lineage read from Databricks', `${l.nodes.filter((n) => n.kind === 'table').length} tables, ${l.layers} step${l.layers === 1 ? '' : 's'} upstream of ${l.roots.join(', ')}`.slice(0, 300));
+        return '';
+      },
       saveData: (id, datasets, outputs) => CAN.work(state.role) && updateSystem(id, (x) => ({ ...x, datasets, outputs }), 'Data assets updated', `${datasets.length} datasets`),
 
       // ----- admin -----

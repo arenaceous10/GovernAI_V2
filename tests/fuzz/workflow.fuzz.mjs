@@ -144,6 +144,7 @@ for (let i = 0; i < STEPS; i++) {
     ['setSetting', () => A.setSetting(r.pick(['purgeAfterDays', 'reviewSlaDays', 'autoEvidenceDays']), r.pick([0, 30, -5, 'abc', 5]))],
     ['connectModel', () => A.connectModel(x.id, { kind: r.pick(['databricks-uc', 'mlflow']), host: 'https://adb-1.2.azuredatabricks.net', model: 'a.b.c', tokenSealed: 'v1.x',
       result: { latest: '2', versions: r.pick([[], [{ version: '2', metrics: { auc: 0.9 }, run: r.pick([undefined, {}, { code: {}, params: { a: '1' }, datasets: [{ table: 'a.b.t', digest: 'd' }, { table: null }] }]) }, { version: '1' }]]), monitoring: r.pick([null, { monitor: { status: 'ACTIVE' }, performance: { slices: [{ key: 'sex', value: 'F', metrics: {} }] } }]) } })],
+    ['saveLineage', () => A.saveLineage(x.id, r.pick([null, 'x', { roots: ['a.b.c'], nodes: [{ name: 'a.b.c', kind: 'table' }, { name: 'a.b.d', kind: 'table' }, { name: r.pick(['s3://x/y', {}, null]), kind: 'path' }], edges: [{ from: 'a.b.d', to: 'a.b.c' }, { from: 'a.b.c', to: 'a.b.d' }], layers: r.pick([1, -1, 'x']) }]))],
     ['attachAuto', () => A.attachAuto(x.id, r.pick([x.stage, r.int(1, 10)]), r.pick([...H.STAGES[(x.stage || 1) - 1].evidence, 'not an item']))],
     ['importTables', () => A.importTables(x.id, [{ name: 'a.b.t', owner: 'o', columns: 3, personal: r.pick([undefined, null, { tagsRead: true, tagged: [{ column: 'email', tag: 'pii' }] }, { tagsRead: false }]) }])],
     ['applyModelSync', () => (x.connector ? A.applyModelSync(x.id, { latest: String(r.int(1, 9)), versions: [], monitoring: null }) : null)],

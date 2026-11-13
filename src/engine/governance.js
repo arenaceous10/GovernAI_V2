@@ -313,9 +313,15 @@ export function autoEvidence(x, { now = new Date(), maxAgeDays = AUTO_MAX_AGE_DA
   }
   const tt = trainingTables(c);
   const ucd = (x.datasets || []).filter((d) => d.uc?.name);
-  if (tt.tables.length || ucd.some((d) => d.uc.lineageSource)) {
+  const wl = x.lineage?.nodes?.length ? x.lineage : null;
+  if (tt.tables.length || ucd.some((d) => d.uc.lineageSource) || wl) {
     const parts = [];
     if (tt.tables.length) parts.push(`version ${tt.version} was trained on ${tt.tables.map((t) => `${t.name}${t.digest ? ` (digest ${t.digest})` : ''}`).join(', ')}`);
+    if (wl) {
+      const nt = wl.nodes.filter((n) => n.kind === 'table').length; const nf = wl.nodes.filter((n) => n.kind === 'path').length;
+      const orig = originalSources(wl);
+      parts.push(`lineage read ${day(wl.readAt)}: ${plural(nt, 'table')}${nf ? ` and ${plural(nf, 'file location')}` : ''}, up to ${plural(wl.layers, 'step')} upstream${orig.length ? `, original sources ${orig.slice(0, 6).join(', ')}${orig.length > 6 ? ` and ${orig.length - 6} more` : ''}` : ''}${wl.truncated ? ' (the walk stopped early, so this is not complete)' : ''}`);
+    }
     const lin = ucd.filter((d) => (d.uc.upstream?.length || 0) + (d.uc.downstream?.length || 0) > 0);
     if (lin.length) parts.push(`lineage recorded for ${lin.map((d) => `${d.uc.name}${d.uc.upstream?.length ? ` (from ${d.uc.upstream.slice(0, 4).join(', ')})` : ''}`).join('; ')}`);
     const owners = ucd.filter((d) => d.owner);
@@ -353,6 +359,13 @@ export function autoMismatch(x, rec) {
     else if (factsOf(now[item].text) !== factsOf(v.ref)) out.push({ item, reason: 'differs', now: now[item].text });
   }
   return out;
+}
+
+// In a lineage walked from Databricks: the nodes nothing else feeds (the files and tables everything starts from).
+export function originalSources(l) {
+  const fed = new Set((l?.edges || []).map((e) => e.to));
+  const roots = new Set(l?.roots || []);
+  return (l?.nodes || []).filter((n) => !fed.has(n.name) && !roots.has(n.name)).map((n) => n.name).sort();
 }
 
 // ---------- what a connected registry can confirm ----------
@@ -407,7 +420,7 @@ export function databricksFlags(x) {
   if (missing.length) out.push({ id: 'undeclared', text: `Model version ${tt.version} was trained on ${plural(missing.length, 'table')} not registered under Data and lineage: ${missing.map((t) => t.name).join(', ')}. Import ${missing.length === 1 ? 'it' : 'them'} so ownership, lineage and personal data are checked.` });
   const has = new Set((x.assessment?.questions || []).map((q) => q.id));
   const read = ds.filter((d) => d.uc?.lineageSource);
-  if (has.has('DG-C2') && typeof x.assessment?.answers?.['DG-C2'] === 'number' && x.assessment.answers['DG-C2'] >= 2 && read.length
+  if (has.has('DG-C2') && typeof x.assessment?.answers?.['DG-C2'] === 'number' && x.assessment.answers['DG-C2'] >= 2 && read.length && !(x.lineage?.edges?.length)
     && !read.some((d) => (d.uc.upstream?.length || 0) + (d.uc.downstream?.length || 0) > 0)) {
     out.push({ id: 'lineage', text: `Data lineage is answered as documented, but Unity Catalog shows no lineage for the ${plural(read.length, 'imported table')}: ${read.map((d) => d.uc.name).slice(0, 5).join(', ')}.` });
   }

@@ -240,5 +240,27 @@ await check('importing tables marks a dataset as personal when the catalog tags 
   await run(() => api().importTables(p.id, [t('main.claims.applicants', [])]));
   assert.equal(d('main.claims.applicants').personal, true);
 });
+await check('lineage read from Databricks is stored cut to size, logged, and marks fed datasets as documented', async () => {
+  await as('admin'); await run(() => api().resetDemo());
+  const p = api().state.systems.find((x) => x.status === 'Active' && x.stage === 4);
+  await as('client', p.clientId);
+  await run(() => api().importTables(p.id, [{ name: 'main.gold.features', owner: 'o', columns: 3, upstream: [], downstream: [], lineageSource: null }]));
+  const d0 = sys(p.id).datasets.find((d) => d.uc?.name === 'main.gold.features');
+  assert.equal(d0.lineage, false);
+  const raw = { roots: ['main.gold.features'], layers: 2, source: 'system.access.table_lineage', truncated: null, notes: [],
+    nodes: [{ name: 'main.gold.features', kind: 'table', type: 'TABLE' }, { name: 'main.silver.claims', kind: 'table', type: 'TABLE' }, { name: 's3://b/claims', kind: 'path', type: 'PATH' }, { name: 'evil; drop', kind: 'table' }],
+    edges: [{ from: 'main.silver.claims', to: 'main.gold.features' }, { from: 's3://b/claims', to: 'main.silver.claims' }, { from: 'evil; drop', to: 'main.silver.claims' }] };
+  let err; await run(() => { err = api().saveLineage(p.id, raw); });
+  assert.equal(err, '');
+  const l = sys(p.id).lineage;
+  assert.deepEqual(l.nodes.map((n) => n.name), ['main.gold.features', 'main.silver.claims', 's3://b/claims']);
+  assert.equal(l.edges.length, 2);
+  assert.ok(l.readAt);
+  assert.equal(sys(p.id).datasets.find((d) => d.uc?.name === 'main.gold.features').lineage, true);
+  assert.ok(api().state.audit.some((a) => a.action === 'Lineage read from Databricks' && /2 tables, 2 steps upstream of main\.gold\.features/.test(a.detail)));
+  await as('assessor');
+  await run(() => { err = api().saveLineage(p.id, raw); });
+  assert.match(err, /Only the client/);
+});
 console.log(JSON.stringify(results, null, 1));
 process.exit(results.every((x) => x.ok) ? 0 : 1);

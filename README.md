@@ -213,6 +213,27 @@ All four use the product's single model-registry connection (address and a seale
   otherwise from Databricks' lineage endpoint, which is not in its public API reference. Use, classification and
   steward stay as people set them.
 
+**Lineage built from Databricks (Data and lineage tab)**
+
+- One click, "Build lineage from Databricks", no table names typed. The walk starts from the tables the model
+  version in use was trained on (datasets logged on its training run, and the model version's feature-table
+  dependencies) plus any table already registered from the catalog. Those tables are registered as datasets (owner,
+  columns, personal-data tags). If the run names no catalog table, "Add starting tables" takes names instead.
+- Databricks is then asked, layer by layer, what each table was built from: one query per layer against
+  `system.access.table_lineage` (the last 365 days, table names passed as parameters). Each source table is asked
+  about in turn, so a table built from several tables, each built from several more, gives every layer. Files a table
+  was loaded from (cloud storage paths) are kept as original sources, one per folder, with any key written into the
+  path removed. Cycles are handled (each table is asked about once).
+- Limits: 6 steps upstream, 80 tables or file locations, and no new step after 24 seconds (the server function stops
+  at 60). When a limit is hit the screen says the lineage is not complete.
+- Without a SQL warehouse ID, or when the system table is not readable, Databricks' lineage endpoint is asked one
+  table at a time (at most 40 calls). It is not in Databricks' public API reference.
+- The graph draws every layer left to right: original sources, each step in between, the model inputs, the AI system,
+  where outputs go. Click a table to trace what feeds it and what it feeds. Datasets typed by hand still appear,
+  with their source systems. The lineage is stored on the product with its read date, logged in the audit trail, goes
+  into the dataset lineage evidence and the Annex IV draft, and marks the registered tables it covers as having
+  documented lineage.
+
 **What is read about how the model was made**
 
 - **Training run** (AI card, "How version N was made"): for the newest three versions, the MLflow run behind each one:
@@ -356,7 +377,7 @@ node tests/e2e/operations.cjs              # system health, error reports, backu
 N=1000 node tests/e2e/scale.cjs            # timings with a large portfolio
 node tests/e2e/clients.cjs                 # client administration
 node tests/e2e/proof.cjs                   # record, signed packs, public check, Word drafts, registry, operations, branding
-node tests/e2e/databricks.cjs              # training run, training tables, personal-data tags, auto-verified evidence and its expiry
+node tests/e2e/databricks.cjs              # training run, training tables, lineage walk, personal-data tags, auto-verified evidence
 node tests/e2e/withdraw.cjs                # withdrawal request, decision, archive, restore, permanent deletion
 ```
 

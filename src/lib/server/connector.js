@@ -505,3 +505,97 @@ export async function readTables({ base, token, tables, warehouseId }, { fetchIm
     notes: [lineageNote, tagNote].filter(Boolean),
   };
 }
+
+// ---------- lineage built by walking upstream from the model's own tables ----------
+// Starts from the tables the model was trained on and asks, layer by layer, "what was this built from?", until
+// nothing new turns up or a limit is reached. One SQL query per layer against system.access.table_lineage (the last
+// 365 days); table names travel as parameters. Files a table was loaded from are kept as sources, one per folder,
+// and are not walked further. Without a SQL warehouse, or when the system table is not readable, Databricks' lineage
+// endpoint is asked table by table instead (it is not in the public API reference).
+// A new layer is only started while there is time for one more query (up to 30 s) inside the 60 s function limit.
+const LINEAGE_BUDGET_MS = 24000;
+function folderOf(path) {
+  const m = String(path || '').match(/^([a-z][a-z0-9+.-]{1,20}):\/+([^/?#]+)(?:\/([^?#]*))?/i);
+  if (!m) return null;
+  let host = m[2];
+  if (/^[^@]*:[^@]*@/.test(host)) host = host.replace(/^[^@]*@/, '');   // never keep a key or password written into a path
+  const segs = String(m[3] || '').split('/').filter(Boolean);
+  const first = segs[0] && !(segs.length === 1 && /\.[A-Za-z0-9]{2,8}$/.test(segs[0])) ? `/${segs[0]}` : '';
+  return `${m[1].toLowerCase()}://${host}${first}`.slice(0, 220);
+}
+export async function walkLineage({ base, token, warehouseId, roots, maxDepth = 6, maxNodes = 80 }, { fetchImpl = defaultFetch } = {}) {
+  const start = [...new Set((roots || []).map((t) => String(t).trim()).filter(Boolean))].slice(0, 30);
+  if (!start.length) throw new Error('There is no table to start from: the training run names no catalog table. Add a table name, or log the training data with mlflow.log_input.');
+  const bad = start.filter((t) => !validTable(t));
+  if (bad.length) throw new Error(`Name tables as catalog.schema.table: ${bad.slice(0, 3).join(', ')}`);
+  const nodes = new Map(start.map((n) => [n, { name: n, kind: 'table', type: 'TABLE' }]));
+  const edges = new Map();
+  const notes = []; let truncated = null; let layers = 0;
+  let useSql = !!warehouseId && validWarehouse(warehouseId);
+  let source = useSql ? 'system.access.table_lineage' : 'lineage API (unofficial)';
+  const began = Date.now(); let calls = 0;
+  // Sources of one layer of tables: [{ from, to, kind, type }]
+  const viaSql = async (targets) => {
+    const params = targets.map((n, i) => ({ name: `t${i}`, value: n }));
+    const rows = await sql(fetchImpl, base, token, warehouseId,
+      `SELECT source_table_full_name, source_type, source_path, target_table_full_name, max(event_time) AS last_seen FROM system.access.table_lineage
+       WHERE target_table_full_name IN (${targets.map((_, i) => `:t${i}`).join(', ')}) AND (source_table_full_name IS NOT NULL OR source_path IS NOT NULL)
+         AND event_time >= current_date() - INTERVAL 365 DAYS
+       GROUP BY source_table_full_name, source_type, source_path, target_table_full_name LIMIT 500`, params);
+    if (rows.length >= 500) truncated = truncated || 'size';
+    return rows.filter((r) => r && targets.includes(r.target_table_full_name)).map((r) => {
+      const t = String(r.source_type || '').toUpperCase().slice(0, 30);
+      if (typeof r.source_table_full_name === 'string' && validTable(r.source_table_full_name)) return { from: r.source_table_full_name, to: r.target_table_full_name, kind: 'table', type: t || 'TABLE' };
+      const f = !r.source_table_full_name && r.source_path ? folderOf(r.source_path) : null;
+      return f ? { from: f, to: r.target_table_full_name, kind: 'path', type: 'PATH' } : null;
+    }).filter(Boolean);
+  };
+  const viaApi = async (targets) => {
+    const out = []; let ok = 0;
+    for (const t of targets) {
+      if (calls >= 40) { truncated = truncated || 'size'; break; }
+      calls++;
+      try {
+        const j = await getJson(fetchImpl, `${base}/api/2.0/lineage-tracking/table-lineage?table_name=${encodeURIComponent(t)}&include_entity_lineage=false`, token);
+        ok++;
+        for (const u of arr(j.upstreams)) {
+          const i = u?.tableInfo || {}; const full = [i.catalog_name, i.schema_name, i.name].every((p) => typeof p === 'string' && p) ? `${i.catalog_name}.${i.schema_name}.${i.name}` : null;
+          if (full && validTable(full)) out.push({ from: full, to: t, kind: 'table', type: String(i.table_type || 'TABLE').toUpperCase().slice(0, 30) });
+        }
+      } catch { /* one table that cannot be read does not stop the walk */ }
+    }
+    if (!ok) throw new Error('none of the tables could be read');
+    return out;
+  };
+  let frontier = start;
+  for (let depth = 1; frontier.length; depth++) {
+    if (depth > maxDepth) { truncated = truncated || 'depth'; break; }
+    if (Date.now() - began > LINEAGE_BUDGET_MS) { truncated = truncated || 'time'; break; }
+    let found;
+    try {
+      found = useSql ? await viaSql(frontier.slice(0, 60)) : await viaApi(frontier);
+    } catch (e) {
+      if (useSql && depth === 1) {   // the system table is not readable: try the endpoint from the start
+        const m = String(e.message || '').match(/^(\S+) has no ([A-Z ]+) on (\S+)/);
+        notes.push(`The lineage system table is not readable (${m ? `${m[1]} has no ${m[2]} on ${m[3]}` : String(e.message || '').slice(0, 160)}), so lineage came from Databricks' lineage endpoint instead`);
+        useSql = false; source = 'lineage API (unofficial)';
+        try { found = await viaApi(frontier); } catch (e2) { throw new Error(`Lineage could not be read: ${String(e2.message || '').slice(0, 120)}`); }
+      } else if (depth === 1) throw new Error(`Lineage could not be read: ${String(e.message || '').slice(0, 160)}`);
+      else { notes.push(`The walk stopped at layer ${depth}: ${String(e.message || '').slice(0, 160)}`); break; }
+    }
+    const next = [];
+    for (const f of found) {
+      if (f.from === f.to) continue;
+      if (!nodes.has(f.from)) {
+        if (nodes.size >= maxNodes) { truncated = truncated || 'size'; continue; }
+        nodes.set(f.from, { name: f.from, kind: f.kind, type: f.type });
+        if (f.kind === 'table') next.push(f.from);
+      }
+      edges.set(`${f.from}\n${f.to}`, { from: f.from, to: f.to });
+    }
+    if (next.length || found.some((f) => f.kind === 'path' && nodes.has(f.from))) layers = Math.max(layers, [...edges.values()].length ? depth : 0);
+    frontier = next;
+    if (truncated === 'size' && nodes.size >= maxNodes) break;
+  }
+  return { roots: start, nodes: [...nodes.values()], edges: [...edges.values()].slice(0, 500), layers, truncated, source, notes };
+}

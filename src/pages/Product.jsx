@@ -7,7 +7,7 @@ import { geoName } from '../data/countries.js';
 import { STAGES, stageOf, requiredApprovals, ROLES, STAGE_STATUS, GATE_STAGES, ON_DEMAND, phaseOf } from '../data/lifecycle.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
 import { sectionOf, sectionOrder, isStaged, isProvisional, controlGaps } from '../engine/engine.js';
-import { stageControlGaps, evidenceReuse, registryChecks, incidentClocks, breachSignals, bulkTickable, legalByLaw, autoEvidence, autoMismatch, evidenceCurrent, autoMaxAge, recordAsOf, databricksFlags, trainingTables, INCIDENT_SEVERITY, SERIOUS_KINDS } from '../engine/governance.js';
+import { stageControlGaps, evidenceReuse, registryChecks, incidentClocks, breachSignals, bulkTickable, legalByLaw, autoEvidence, autoMismatch, evidenceCurrent, autoMaxAge, pullState, recordAsOf, databricksFlags, trainingTables, INCIDENT_SEVERITY, SERIOUS_KINDS } from '../engine/governance.js';
 import { controlFor, itemState, isMandatory, validReason, controlStatus, stageCompletion, SKIP_REASONS, MIN_REASON, COMPASS, COMPASS_IDS } from '../data/controls.js';
 import { downloadReport } from '../engine/report.js';
 import { downloadDeck } from '../engine/deck.js';
@@ -18,6 +18,7 @@ import { toast, ProductDeadlines } from '../components/Extras.jsx';
 import Results, { fwName } from '../components/Results.jsx';
 import DataAssets, { catalogCoverage } from '../components/DataAssets.jsx';
 import LineageGraph from '../components/LineageGraph.jsx';
+import { lineageRoots } from '../engine/lineage.js';
 import { useStore, stageBlockers, waitingOn, newStage, CAN, canWithdraw, purgeEligible, WITHDRAW_REASONS } from '../store/store.jsx';
 import { RecordTab } from '../components/Proof.jsx';
 import { callApi } from '../lib/api.js';
@@ -668,7 +669,7 @@ function UnityImport({ s }) {
     finally { setBusy(false); }
   };
   return (
-    <Panel title="Import from Unity Catalog" sub={`Owner, description, columns, lineage, monitoring and personal-data tags for each table, read from ${s.connector.host.replace(/^https:\/\//, '')}. Use, classification and steward stay as you set them. A dataset is marked as personal data when its columns are tagged that way.`}>
+    <Panel title="Register more tables from Unity Catalog" sub={`For tables the model reads that the lineage build did not register. Owner, description, columns, lineage, monitoring and personal-data tags for each table, read from ${s.connector.host.replace(/^https:\/\//, '')}. Use, classification and steward stay as you set them. A dataset is marked as personal data when its columns are tagged that way.`}>
       {fromModel.length > 0 && (
         <div className="callout small" style={{ marginBottom: 10 }}><b>Model version {tt.version} was trained on {fromModel.length} table{fromModel.length === 1 ? '' : 's'} not registered here:</b> <span className="mono">{fromModel.join(', ')}</span>.{' '}
           <button type="button" className="linkbtn" onClick={() => setNames([...new Set([...names.split(/[\s,;]+/).filter(Boolean), ...fromModel])].join('\n'))}>Add {fromModel.length === 1 ? 'it' : 'them'} to the list</button>
@@ -682,6 +683,75 @@ function UnityImport({ s }) {
       {!s.connector.warehouseId && <p className="xs mute" style={{ marginTop: 6 }}>Lineage comes from Databricks' lineage system table when a SQL warehouse ID is set on the AI card; without one, GovernAI tries Databricks' lineage endpoint, which is not part of its public API. Personal-data tags also need the SQL warehouse: without one they are not read.</p>}
       {errs.length > 0 && <ul className="xs bad-text" style={{ margin: '8px 0 0', paddingLeft: 16 }}>{errs.map((e) => <li key={e}>{e}</li>)}</ul>}
     </Panel>
+  );
+}
+
+// Builds the lineage from Databricks with one click: the tables the model was trained on are registered (owner,
+// columns, personal-data tags), then Databricks is asked layer by layer what each table was built from.
+function LineageBuild({ s }) {
+  const { role, importTables, saveLineage, state } = useStore();
+  const [extra, setExtra] = useState('');
+  const [more, setMore] = useState(false);
+  const [busy, setBusy] = useState('');
+  const [errs, setErrs] = useState([]);
+  const l = s.lineage;
+  const isDbx = s.connector?.kind === 'databricks-uc';
+  const can = cloud && isDbx && CAN.work(role);
+  const extraList = extra.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+  const roots = lineageRoots(s, extraList);
+  const fresh = l ? pullState(l.readAt, { maxAgeDays: autoMaxAge(state.settings) }) : null;
+  const run = async () => {
+    setErrs([]);
+    const bad = extraList.filter((t) => !roots.includes(t));
+    if (bad.length) { setErrs([`Name tables as catalog.schema.table: ${bad.join(', ')}`]); return; }
+    if (!roots.length) { setMore(true); setErrs(['The training run names no catalog table. Add the tables the model reads, below.']); return; }
+    try {
+      const known = new Set((s.datasets || []).map((d) => d.uc?.name).filter(Boolean));
+      const add = roots.filter((t) => !known.has(t));
+      if (add.length) {
+        setBusy('Reading the model\'s tables');
+        const res = await callApi('/api/connector', { action: 'tables', productId: s.id, tables: add.slice(0, 20) });
+        const ok = res.tables.filter((t) => !t.error);
+        if (ok.length) importTables(s.id, ok);
+        setErrs(res.tables.filter((t) => t.error).map((t) => `${t.name}: ${t.error}`));
+      }
+      setBusy('Walking the lineage upstream');
+      const r = await callApi('/api/connector', { action: 'lineage', productId: s.id, roots });
+      const e = saveLineage(s.id, r);
+      if (e) setErrs((x) => [...x, e]);
+      else { toast(`Lineage read: ${r.nodes.filter((n) => n.kind === 'table').length} tables, ${r.layers} step${r.layers === 1 ? '' : 's'} upstream`); setExtra(''); setMore(false); }
+    } catch (err) { setErrs((x) => [...x, err.message]); }
+    finally { setBusy(''); }
+  };
+  if (!cloud) return null;
+  const tables = l ? l.nodes.filter((n) => n.kind === 'table').length : 0;
+  const files = l ? l.nodes.filter((n) => n.kind === 'path').length : 0;
+  return (
+    <div className="stack" style={{ gap: 6, marginBottom: 10 }}>
+      {l ? (
+        <div className="row small" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <Database size={14} aria-hidden />
+          <span>Read from Databricks on {fmtDate(l.readAt)}: <b>{tables} table{tables === 1 ? '' : 's'}</b>{files ? <> and <b>{files} file location{files === 1 ? '' : 's'}</b></> : null}, up to <b>{l.layers} step{l.layers === 1 ? '' : 's'} upstream</b> of the model's tables, starting from <span className="mono">{l.roots.join(', ')}</span>.</span>
+          {fresh?.expired && <Pill tone="warn">Out of date</Pill>}
+          <span className="xs mute">Source: {l.source}{l.truncated ? ` · stopped early (${{ depth: 'more than 6 steps', size: 'too many tables', time: 'time limit' }[l.truncated]}): what is shown is not complete` : ''}</span>
+        </div>
+      ) : isDbx ? <p className="small mute" style={{ margin: 0 }}>Build the lineage from Databricks: starting from the tables model version {trainingTables(s.connector).version || ''} was trained on, every table and file it was built from, layer by layer.</p>
+        : <p className="small mute" style={{ margin: 0 }}>Connect the model to Databricks Unity Catalog on the AI card (from stage 4) and the lineage can be built from Databricks automatically.</p>}
+      {l?.notes?.length > 0 && <ul className="xs mute" style={{ margin: 0, paddingLeft: 16 }}>{l.notes.map((n) => <li key={n}>{n}</li>)}</ul>}
+      {can && (
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <button type="button" className="btn primary sm" onClick={run} disabled={!!busy}>{busy ? <Loader2 size={14} className="spin" /> : <Database size={14} />} {busy || (l ? 'Rebuild from Databricks' : 'Build lineage from Databricks')}</button>
+          {!more && <button type="button" className="linkbtn xs" onClick={() => setMore(true)}>Add starting tables</button>}
+          {roots.length > 0 && !busy && <span className="xs mute">Starts from {roots.length} table{roots.length === 1 ? '' : 's'}: {roots.slice(0, 4).join(', ')}{roots.length > 4 ? '…' : ''}</span>}
+        </div>
+      )}
+      {can && more && (
+        <label className="field" style={{ maxWidth: 520 }}><span>More tables the model reads (catalog.schema.table), if the training run does not name them</span>
+          <textarea className="input" rows={2} value={extra} onChange={(e) => setExtra(e.target.value)} placeholder="main.claims.features" /></label>
+      )}
+      {can && !s.connector.warehouseId && <p className="xs mute" style={{ margin: 0 }}>Without a SQL warehouse ID on the AI card, lineage comes from Databricks' lineage endpoint (not part of its public API), one table at a time.</p>}
+      {errs.length > 0 && <ul className="xs bad-text" style={{ margin: 0, paddingLeft: 16 }}>{errs.map((e) => <li key={e}>{e}</li>)}</ul>}
+    </div>
   );
 }
 
@@ -710,10 +780,11 @@ function DataTab({ s }) {
   return (
     <div className="stack">
       {flags.length > 0 && <div className="callout warn"><b>What Databricks shows differs from what was declared.</b><ul className="list-plain small" style={{ margin: '4px 0 0' }}>{flags.map((f) => <li key={f.id}>{f.text}</li>)}</ul><div className="xs mute" style={{ marginTop: 4 }}>The reviewer sees this list too.</div></div>}
-      {!edit && <UnityImport s={s} />}
       <Panel title="Lineage" right={!edit && CAN.work(role) && <button className="btn sm" onClick={() => { setD(s.datasets); setO(s.outputs); setEdit(true); }}>Edit data assets</button>}>
-        <LineageGraph name={s.name} datasets={edit ? d : s.datasets} outputs={edit ? o : s.outputs} />
+        {!edit && <LineageBuild s={s} />}
+        <LineageGraph name={s.name} datasets={edit ? d : s.datasets} outputs={edit ? o : s.outputs} lineage={s.lineage} />
       </Panel>
+      {!edit && <UnityImport s={s} />}
       {edit ? (
         <Panel title="Edit data assets" right={<div className="row"><button className="btn" onClick={() => setEdit(false)}>Cancel</button><button className="btn primary" onClick={() => { saveData(s.id, d.filter((x) => x.name.trim()), o); setEdit(false); }}>Save data assets</button></div>}>
           <DataAssets datasets={d} outputs={o} onChange={(a, b) => { setD(a); setO(b); }} />

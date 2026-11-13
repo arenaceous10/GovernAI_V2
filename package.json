@@ -8,7 +8,7 @@
     "build": "vite build",
     "build:single": "vite build --mode single",
     "preview": "vite preview",
-    "test": "node --test tests/engine.test.js tests/sync.test.js tests/features.test.js tests/guard.test.js tests/proof.test.js tests/ops.test.js tests/governance.test.js tests/databricks.test.js",
+    "test": "node --test tests/engine.test.js tests/sync.test.js tests/features.test.js tests/guard.test.js tests/proof.test.js tests/ops.test.js tests/governance.test.js tests/databricks.test.js tests/lineage.test.js",
     "test:db": "node --test tests/db/rls.test.mjs",
     "test:fuzz": "sh tests/fuzz/build-harness.sh && node tests/fuzz/run-all.mjs"
   },
