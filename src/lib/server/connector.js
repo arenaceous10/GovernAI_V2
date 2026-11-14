@@ -618,27 +618,48 @@ export async function readFull(c, token, opts = {}) {
 }
 
 // ---------- every registered model the token can see ----------
-// For the "models with no product" list. Unity Catalog: up to 3 pages of 100; MLflow: one page of 100.
+// For the "models with no product" list. Each model says where it comes from, using its catalog's type:
+//   own      the organisation's own catalogs
+//   builtin  the system catalog (Databricks' own foundation and embedding models, e.g. system.ai.*)
+//   shared   a catalog shared into the workspace by another company (Delta Sharing or Marketplace)
+// Unity Catalog: up to 10 pages of 100; MLflow: one page of 100.
 const MODEL_NAME = /^[A-Za-z0-9_.\-/ ]{1,200}$/;
 export async function listModels({ kind, host, token }, { fetchImpl = defaultFetch, allowLocal = false, resolve } = {}) {
   if (!KINDS[kind]) throw new Error('Choose MLflow or Databricks Unity Catalog');
   const checked = await checkHost(host, { allowLocal, resolve });
   const base = kind === 'databricks-uc' ? new URL(checked).origin : checked;
-  const out = new Map(); let truncated = false;
-  const add = (name, owner, at) => { if (typeof name === 'string' && MODEL_NAME.test(name) && !out.has(name)) out.set(name, { name, owner: typeof owner === 'string' ? owner.slice(0, 200) : '', updatedAt: iso(at) }); };
+  const out = new Map(); let truncated = false; let catalogTypesRead = false;
+  const cats = new Map();
+  const add = (name, owner, at, source = 'own', provider = '') => { if (typeof name === 'string' && MODEL_NAME.test(name) && !out.has(name)) out.set(name, { name, owner: typeof owner === 'string' ? owner.slice(0, 200) : '', updatedAt: iso(at), source, ...(provider ? { provider } : {}) }); };
   if (kind === 'databricks-uc') {
+    try {
+      let page = '';
+      for (let i = 0; i < 5; i++) {
+        const j = await getJson(fetchImpl, `${base}/api/2.1/unity-catalog/catalogs?max_results=200${page ? `&page_token=${encodeURIComponent(page)}` : ''}`, token, { notFound: 'The workspace did not list its catalogs' });
+        for (const c of arr(j.catalogs)) if (c && typeof c.name === 'string') cats.set(c.name, { type: String(c.catalog_type || ''), provider: typeof c.provider_name === 'string' ? c.provider_name.slice(0, 120) : '' });
+        page = typeof j.next_page_token === 'string' ? j.next_page_token.slice(0, 2000) : '';
+        if (!page) break;
+      }
+      catalogTypesRead = true;
+    } catch { /* without catalog types only the system catalog can be recognised, by its name */ }
+    const sourceOf = (full) => {
+      const cat = String(full).split('.')[0]; const c = cats.get(cat);
+      if (cat === 'system' || c?.type === 'SYSTEM_CATALOG') return ['builtin', ''];
+      if (c?.type === 'DELTASHARING_CATALOG') return ['shared', c.provider];
+      return ['own', ''];
+    };
     let page = '';
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 10; i++) {
       const j = await getJson(fetchImpl, `${base}/api/2.1/unity-catalog/models?max_results=100${page ? `&page_token=${encodeURIComponent(page)}` : ''}`, token, { notFound: 'The workspace did not list its models' });
-      for (const m of arr(j.registered_models)) if (m && typeof m === 'object') add(m.full_name, m.owner, m.updated_at);
+      for (const m of arr(j.registered_models)) if (m && typeof m === 'object' && typeof m.full_name === 'string') add(m.full_name, m.owner, m.updated_at, ...sourceOf(m.full_name));
       page = typeof j.next_page_token === 'string' ? j.next_page_token.slice(0, 2000) : '';
       if (!page) break;
-      if (i === 2) truncated = true;
+      if (i === 9) truncated = true;
     }
   } else {
     const j = await getJson(fetchImpl, `${base}/api/2.0/mlflow/registered-models/search?max_results=100`, token, { notFound: 'The registry did not list its models' });
     for (const m of arr(j.registered_models)) if (m && typeof m === 'object') add(m.name, m.user_id, m.last_updated_timestamp);
     truncated = !!j.next_page_token;
   }
-  return { models: [...out.values()].sort((a, b) => a.name.localeCompare(b.name)), truncated };
+  return { models: [...out.values()].sort((a, b) => a.name.localeCompare(b.name)), truncated, catalogTypesRead };
 }

@@ -54,10 +54,16 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
     assert(row(ID).data.connector.versions[0].run.code.commit === '1a2b3c4d5e6f7a8b', 'run details stored with the connection');
 
     // 1b. models in the workspace that have no product
-    db.registryModels = [{ name: 'main.claims.triage', owner: 'ml-platform' }, { name: 'main.claims.fraud_score', owner: 'fraud-team' }, { name: 'main.hr.cv_screening', owner: 'hr-analytics' }];
+    db.registryModels = [{ name: 'main.claims.triage', owner: 'ml-platform', source: 'own' }, { name: 'main.claims.fraud_score', owner: 'fraud-team', source: 'own' }, { name: 'main.hr.cv_screening', owner: 'hr-analytics', source: 'own' },
+      { name: 'system.ai.bge_m3', owner: 'System user', source: 'builtin' }, { name: 'system.ai.databricks-claude-sonnet-5', owner: 'System user', source: 'builtin' },
+      { name: 'databricks_meta_llama_3_models.models.meta_llama_3_8b', owner: 'x', source: 'shared', provider: 'databricks' }];
     await p.getByRole('button', { name: /Find models with no product/ }).click(); await W(900);
     t = await body();
-    assert(/2 of 3 registered models have no product in GovernAI/.test(t), 'unregistered models counted');
+    assert(/2 of your organisation's 3 registered models have no product in GovernAI/.test(t), 'unregistered own models counted: ' + (t.match(/[^\n]*no product in GovernAI[^\n]*/) || [''])[0]);
+    assert(!t.includes('system.ai.bge_m3') && !t.includes('meta_llama_3_8b'), 'built-in and shared models folded away');
+    assert(/Not listed above: 2 built-in Databricks models \(the system catalog\) and 1 model shared into the workspace by databricks/.test(t), 'folded models counted');
+    await p.getByRole('button', { name: 'Show them' }).click(); await W(200);
+    assert((await body()).includes('system.ai.bge_m3'), 'folded models can be shown');
     assert(t.includes('main.claims.fraud_score') && t.includes('main.hr.cv_screening'), 'unregistered models listed');
     assert(!/main\.claims\.triage\s*·\s*ml-platform/.test(t), 'the connected model is not listed as unregistered');
 

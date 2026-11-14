@@ -153,12 +153,7 @@ export default function RegistryPanel({ s }) {
               <button type="button" className="btn ghost sm" onClick={findOthers} disabled={!!busy}>{busy === 'models' ? <Loader2 size={14} className="spin" /> : <PlugZap size={14} />} Find models with no product</button>
               <span className="xs mute">Lists every registered model this token can see and shows the ones that are not registered in GovernAI.</span>
             </div>
-            {others && (others.list.length === 0
-              ? <p className="small" style={{ margin: 0 }}>All {others.models.length} registered model{others.models.length === 1 ? '' : 's'} this token can see {others.models.length === 1 ? 'has' : 'have'} a product here.</p>
-              : <div className="callout warn small"><b>{others.list.length} of {others.models.length} registered model{others.models.length === 1 ? '' : 's'} {others.list.length === 1 ? 'has' : 'have'} no product in GovernAI:</b>
-                <ul className="list-plain mono xs" style={{ margin: '4px 0 0' }}>{others.list.slice(0, 30).map((m) => <li key={m.name}>{m.name}{m.owner ? <span className="mute"> · {m.owner}</span> : null}</li>)}</ul>
-                {(others.list.length > 30 || others.truncated) && <div className="xs mute">The list is cut short.</div>}
-                <div className="xs mute" style={{ marginTop: 4 }}>You see only the products of your own organisation, so a model another organisation registered also appears here. Register each one that is in use under "Register a product".</div></div>)}
+            {others && <OtherModels others={others} />}
           </div>
           {cfg && (
             <div className="stack" style={{ borderTop: '1px solid var(--line-2)', paddingTop: 10 }}>
@@ -216,6 +211,40 @@ function HowMade({ s }) {
             {diff.code.changed && <li>Code version changed</li>}
           </ul></div></div>
       ) : null}
+    </div>
+  );
+}
+
+// Registered models with no product. The organisation's own models come first. Databricks' built-in models (the
+// system catalog) and models shared in by another company (Delta Sharing, Marketplace) are folded away: their being
+// in the catalog does not mean anyone uses them.
+function OtherModels({ others }) {
+  const [show, setShow] = useState(false);
+  const own = others.list.filter((m) => (m.source || 'own') === 'own');
+  const builtin = others.list.filter((m) => m.source === 'builtin');
+  const shared = others.list.filter((m) => m.source === 'shared');
+  const ownAll = others.models.filter((m) => (m.source || 'own') === 'own').length;
+  const providers = [...new Set(shared.map((m) => m.provider).filter(Boolean))];
+  const row = (m) => <li key={m.name}>{m.name}{m.owner ? <span className="mute"> · {m.owner}</span> : null}</li>;
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      {own.length === 0
+        ? <p className="small" style={{ margin: 0 }}>{ownAll ? `All ${ownAll} of your organisation's registered model${ownAll === 1 ? '' : 's'} ${ownAll === 1 ? 'has' : 'have'} a product here.` : 'No model of your organisation\'s own is registered in this workspace apart from those with a product.'}</p>
+        : <div className="callout warn small"><b>{own.length} of your organisation's {ownAll} registered model{ownAll === 1 ? '' : 's'} {own.length === 1 ? 'has' : 'have'} no product in GovernAI:</b>
+          <ul className="list-plain mono xs" style={{ margin: '4px 0 0' }}>{own.slice(0, 40).map(row)}</ul>
+          {own.length > 40 && <div className="xs mute">And {own.length - 40} more.</div>}
+          <div className="xs mute" style={{ marginTop: 4 }}>Register each one that is in use under "Register a product". As a client you see only your own organisation's products, so a model another organisation registered in the same workspace also shows here.</div></div>}
+      {(builtin.length + shared.length) > 0 && (
+        <div className="xs mute">
+          Not listed above: {builtin.length > 0 && <>{builtin.length} built-in Databricks model{builtin.length === 1 ? '' : 's'} (the system catalog)</>}{builtin.length > 0 && shared.length > 0 && ' and '}
+          {shared.length > 0 && <>{shared.length} model{shared.length === 1 ? '' : 's'} shared into the workspace{providers.length ? ` by ${providers.join(', ')}` : ''}</>}.
+          {' '}They are provided by Databricks or another company and are available to everyone in the workspace; being in the catalog does not mean anyone uses them. If a product calls one, register that product with a vendor or foundation model as its source.
+          {' '}<button type="button" className="linkbtn xs" onClick={() => setShow(!show)}>{show ? 'Hide them' : 'Show them'}</button>
+          {show && <ul className="list-plain mono xs" style={{ margin: '4px 0 0', maxHeight: 220, overflow: 'auto' }}>{[...shared, ...builtin].map(row)}</ul>}
+        </div>
+      )}
+      {!others.catalogTypesRead && others.models.length > 0 && <p className="xs mute" style={{ margin: 0 }}>The token cannot list catalogs, so only the system catalog is recognised as built-in; shared catalogs show as your own.</p>}
+      {others.truncated && <p className="xs mute" style={{ margin: 0 }}>The workspace has more than 1,000 registered models; only the first 1,000 were read.</p>}
     </div>
   );
 }

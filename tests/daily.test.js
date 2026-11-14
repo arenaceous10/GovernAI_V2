@@ -210,13 +210,35 @@ test('an approval keeps the version\'s training details, so a much later version
 });
 
 // ---------- models in the workspace that nobody registered ----------
+test('built-in and shared models are told apart from the organisation\'s own, using each catalog\'s type', async () => {
+  const { listModels } = await import('../src/lib/server/connector.js');
+  const resolve = async () => [{ address: '93.184.216.34' }];
+  const catalogs = { catalogs: [{ name: 'main', catalog_type: 'MANAGED_CATALOG' }, { name: 'system', catalog_type: 'SYSTEM_CATALOG' },
+    { name: 'databricks_meta_llama_3_models', catalog_type: 'DELTASHARING_CATALOG', provider_name: 'databricks' }] };
+  const models = { registered_models: [{ full_name: 'main.claims.triage', owner: 'a' }, { full_name: 'system.ai.bge_m3', owner: 'System user' },
+    { full_name: 'databricks_meta_llama_3_models.models.meta_llama_3_8b', owner: 'b' }, { full_name: 'other.x.y', owner: 'c' }] };
+  const fetchImpl = async (url) => { const u = new URL(url); const j = /\/catalogs$/.test(u.pathname) ? catalogs : models; return { status: 200, ok: true, text: async () => JSON.stringify(j) }; };
+  const r = await listModels({ kind: 'databricks-uc', host: 'https://adb-1.2.azuredatabricks.net', token: 't' }, { fetchImpl, resolve });
+  const by = Object.fromEntries(r.models.map((m) => [m.name, [m.source, m.provider || '']]));
+  assert.deepEqual(by['main.claims.triage'], ['own', '']);
+  assert.deepEqual(by['system.ai.bge_m3'], ['builtin', '']);
+  assert.deepEqual(by['databricks_meta_llama_3_models.models.meta_llama_3_8b'], ['shared', 'databricks']);
+  assert.deepEqual(by['other.x.y'], ['own', ''], 'a catalog not in the list counts as the organisation\'s own');
+  // the catalog list is not readable: only the system catalog can still be recognised, by name
+  const noCat = async (url) => { const u = new URL(url); return /\/catalogs$/.test(u.pathname) ? { status: 403, ok: false, text: async () => '{}' } : { status: 200, ok: true, text: async () => JSON.stringify(models) }; };
+  const r2 = await listModels({ kind: 'databricks-uc', host: 'https://adb-1.2.azuredatabricks.net', token: 't' }, { fetchImpl: noCat, resolve });
+  assert.equal(r2.models.find((m) => m.name === 'system.ai.bge_m3').source, 'builtin');
+  assert.equal(r2.models.find((m) => m.name.startsWith('databricks_meta')).source, 'own');
+  assert.equal(r2.catalogTypesRead, false);
+});
+
 test('the workspace\'s registered models are listed, page by page, and the ones with no product are picked out', async () => {
   const { listModels } = await import('../src/lib/server/connector.js');
   const { unregisteredModels } = await import('../src/engine/governance.js');
   const resolve = async () => [{ address: '93.184.216.34' }];
   const pages = { '': { registered_models: [{ full_name: 'main.claims.triage', owner: 'a', updated_at: 1762500000000 }, { full_name: 'main.claims.fraud', owner: 'b' }, { full_name: 'bad name; x' }, null], next_page_token: 'p2' },
     p2: { registered_models: [{ full_name: 'main.hr.screening', owner: 'c' }] } };
-  const f = async (url) => { const u = new URL(url); assert.match(u.pathname, /unity-catalog\/models$/); return json(pages[u.searchParams.get('page_token') || '']); };
+  const f = async (url) => { const u = new URL(url); if (/\/catalogs$/.test(u.pathname)) return json({ catalogs: [{ name: 'main', catalog_type: 'MANAGED_CATALOG' }] }); assert.match(u.pathname, /unity-catalog\/models$/); return json(pages[u.searchParams.get('page_token') || '']); };
   f.textWrap = true;
   const fetchImpl = async (url, init) => { const r = await f(url, init); return { ...r, text: async () => JSON.stringify(await r.json()) }; };
   const r = await listModels({ kind: 'databricks-uc', host: 'https://adb-1.2.azuredatabricks.net', token: 't' }, { fetchImpl, resolve });
