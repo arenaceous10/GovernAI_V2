@@ -599,3 +599,46 @@ export async function walkLineage({ base, token, warehouseId, roots, maxDepth = 
   }
   return { roots: start, nodes: [...nodes.values()], edges: [...edges.values()].slice(0, 500), layers, truncated, source, notes };
 }
+
+// ---------- one full read: registry, then (best effort, in parallel) GenAI evaluations and production monitoring ----------
+// Used by "Check now" and by the daily job, so both see a registry the same way.
+export async function readFull(c, token, opts = {}) {
+  const reg = await readRegistry({ kind: c.kind, host: c.host, model: c.model, token }, opts);
+  const wh = validWarehouse(c.warehouseId) ? String(c.warehouseId).trim() : '';
+  const [genai, monitoring] = await Promise.allSettled([
+    readGenAI({ base: reg.base, token, experiment: c.experiment, versions: reg.versions }),
+    c.kind === 'databricks-uc' && c.monitorTable ? readMonitoring({ base: reg.base, token, table: c.monitorTable, warehouseId: wh }) : Promise.resolve(null),
+  ]);
+  const { base, ...rest } = reg; void base;
+  return {
+    ...rest,
+    genai: genai.status === 'fulfilled' ? genai.value : { notes: [genai.reason?.message || 'Evaluations could not be read'] },
+    monitoring: monitoring.status === 'fulfilled' ? monitoring.value : { table: c.monitorTable, notes: [monitoring.reason?.message || 'Monitoring could not be read'] },
+  };
+}
+
+// ---------- every registered model the token can see ----------
+// For the "models with no product" list. Unity Catalog: up to 3 pages of 100; MLflow: one page of 100.
+const MODEL_NAME = /^[A-Za-z0-9_.\-/ ]{1,200}$/;
+export async function listModels({ kind, host, token }, { fetchImpl = defaultFetch, allowLocal = false, resolve } = {}) {
+  if (!KINDS[kind]) throw new Error('Choose MLflow or Databricks Unity Catalog');
+  const checked = await checkHost(host, { allowLocal, resolve });
+  const base = kind === 'databricks-uc' ? new URL(checked).origin : checked;
+  const out = new Map(); let truncated = false;
+  const add = (name, owner, at) => { if (typeof name === 'string' && MODEL_NAME.test(name) && !out.has(name)) out.set(name, { name, owner: typeof owner === 'string' ? owner.slice(0, 200) : '', updatedAt: iso(at) }); };
+  if (kind === 'databricks-uc') {
+    let page = '';
+    for (let i = 0; i < 3; i++) {
+      const j = await getJson(fetchImpl, `${base}/api/2.1/unity-catalog/models?max_results=100${page ? `&page_token=${encodeURIComponent(page)}` : ''}`, token, { notFound: 'The workspace did not list its models' });
+      for (const m of arr(j.registered_models)) if (m && typeof m === 'object') add(m.full_name, m.owner, m.updated_at);
+      page = typeof j.next_page_token === 'string' ? j.next_page_token.slice(0, 2000) : '';
+      if (!page) break;
+      if (i === 2) truncated = true;
+    }
+  } else {
+    const j = await getJson(fetchImpl, `${base}/api/2.0/mlflow/registered-models/search?max_results=100`, token, { notFound: 'The registry did not list its models' });
+    for (const m of arr(j.registered_models)) if (m && typeof m === 'object') add(m.name, m.user_id, m.last_updated_timestamp);
+    truncated = !!j.next_page_token;
+  }
+  return { models: [...out.values()].sort((a, b) => a.name.localeCompare(b.name)), truncated };
+}

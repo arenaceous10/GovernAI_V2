@@ -146,7 +146,18 @@ export function approvedVersionEntry(x, stage, at) {
   const reg = raisedFor ?? x?.connector?.latest; const card = cardVersion(x?.card?.modelVersion);
   const version = reg ?? card;
   if (version == null || String(version).trim() === '') return null;
-  return { version: String(version), at, stage, source: reg != null ? 'registry' : 'card' };
+  // The training details are kept with the approval: the registry is only read in full for its newest versions.
+  const v = (x?.connector?.versions || []).find((o) => String(o.version) === String(version));
+  return { version: String(version), at, stage, source: reg != null ? 'registry' : 'card', ...(v?.run ? { metrics: v.metrics || {}, run: v.run } : {}) };
+}
+// The version a new one is compared with: the one approved last, else the one the app saw before it.
+export const baselineVersion = (x, version) => [...(x?.approvedVersions || [])].reverse().find((a) => String(a.version) !== String(version))?.version ?? x?.connector?.seenVersion ?? null;
+
+// ---------- registered models with no product ----------
+const sameHost = (a, b) => { try { return new URL(a).host === new URL(b).host; } catch { return false; } };
+export function unregisteredModels(models, systems, host) {
+  const have = new Set((systems || []).filter((s) => s.connector?.model && !['Withdrawn', 'Retired'].includes(s.status) && sameHost(s.connector.host, host)).map((s) => s.connector.model));
+  return (models || []).filter((m) => m?.name && !have.has(m.name));
 }
 
 // ---------- breach signals ----------
@@ -254,8 +265,9 @@ export function trainingTables(c) {
 }
 
 // What changed between two registered versions. Needs the run details of both (kept for the newest three).
-export function versionDiff(c, from, to) {
-  const find = (n) => (c?.versions || []).find((v) => String(v.version) === String(n));
+// `approved` (a product's approvedVersions) supplies the details of a version the registry no longer returns them for.
+export function versionDiff(c, from, to, approved = []) {
+  const find = (n) => (c?.versions || []).find((v) => String(v.version) === String(n) && v.run) || (approved || []).find((v) => String(v.version) === String(n) && v.run);
   const a = find(from); const b = find(to);
   if (!a || !b || !a.run || !b.run) return null;
   const lowerIsBetter = (k) => /loss|error|mse|mae|rmse/i.test(k);
@@ -268,6 +280,29 @@ export function versionDiff(c, from, to) {
   const data = [...new Set([...ta.keys(), ...tb.keys()])].sort().filter((t) => ta.get(t) !== tb.get(t)).map((t) => ({ table: t, from: ta.has(t) ? ta.get(t) : null, to: tb.has(t) ? tb.get(t) : null }));
   return { from: String(a.version), to: String(b.version), metrics, params, data, code: { from: a.run.code?.commit || '', to: b.run.code?.commit || '', changed: (a.run.code?.commit || '') !== (b.run.code?.commit || '') } };
 }
+
+// ---------- is a new version a minor or a material change? ----------
+// Minor: the same code, the same parameters, the same training tables (newer rows of the same tables are fine), and
+// no metric worse than the tolerance (2% of its previous value unless set otherwise). Anything else, and anything
+// that cannot be compared, is material. The reviewer still decides; this only says what to look at first.
+export function changeMateriality(c, from, to, { tolerancePct = 2, approved = [] } = {}) {
+  const d = versionDiff(c, from, to, approved);
+  if (!d) return { level: 'material', reasons: [`Version ${to} cannot be compared with version ${from}: the registry holds no training details for one of them`] };
+  const reasons = [];
+  for (const m of d.metrics) if (m.worse && Math.abs(m.to - m.from) > Math.abs(m.from) * tolerancePct / 100) reasons.push(`${m.name} ${m.to < m.from ? 'fell' : 'rose'} from ${round(m.from)} to ${round(m.to)}`);
+  if (d.code.changed) reasons.push('The training code changed');
+  if (d.params.length) reasons.push(`Training parameters changed: ${d.params.slice(0, 6).map((p) => p.name).join(', ')}`);
+  const tables = d.data.filter((t) => t.from == null || t.to == null);
+  if (tables.length) reasons.push(`Training tables changed: ${tables.map((t) => t.table).slice(0, 6).join(', ')}`);
+  return { level: reasons.length ? 'material' : 'minor', reasons, diff: d };
+}
+
+// ---------- the question bank an assessment answered ----------
+// Raised by hand whenever fixed questions or a law's dates change, so an older assessment can be told apart.
+export const BANK_VERSION = '2026.11';
+export const LAW_VERSIONS = { EU_AI_ACT: 'Regulation (EU) 2024/1689 as amended by 2026/1744', GDPR: 'Regulation (EU) 2016/679', DPDP: 'DPDP Act 2023 with DPDP Rules 2025' };
+export const bankStamp = () => ({ bank: BANK_VERSION, laws: { ...LAW_VERSIONS } });
+export const bankOutdated = (assessment) => !!assessment && assessment.bank?.bank !== BANK_VERSION;
 
 // ---------- evidence GovernAI can attach from the registry ----------
 // Keys are stage evidence names. Each entry is a plain-language statement of what was read, with the read date.

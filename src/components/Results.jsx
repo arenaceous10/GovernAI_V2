@@ -1,3 +1,4 @@
+import { bankOutdated, BANK_VERSION } from '../engine/governance.js';
 import { Legend, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip } from 'recharts';
 import { PILLARS, PRINCIPLES, PRINCIPLE_IDS, TIERS, FRAMEWORKS } from '../data/frameworks.js';
 import { riskLabel, sectionName, sectionOrder, readinessStatus, tierBand } from '../engine/engine.js';
@@ -113,7 +114,7 @@ export function LegalPosition({ profile, frameworks }) {
   );
 }
 
-export default function Results({ results, frameworks, profile }) {
+export default function Results({ results, frameworks, profile, assessment = null }) {
   const t = TIERS[results.tier];
   const c = results.cutoffs || { limited: 35, high: 60 };
   const scoreBand = tierBand(results.residual, c);
@@ -126,6 +127,9 @@ export default function Results({ results, frameworks, profile }) {
           <div>
             <div className="verdict"><span className="big" style={{ color: t.color }}>{t.label} risk</span>{results.provisional && <span className="tag">Provisional</span>}<span className="mute">score {results.residual}/100</span></div>
             <p className="mute small" style={{ marginTop: 6 }}>{t.meaning}</p>
+            {assessment && (bankOutdated(assessment)
+              ? <p className="xs" style={{ marginTop: 4 }}><span className="tag">Older question set</span> {assessment.bank?.bank ? `Answered question set ${assessment.bank.bank}; the current one is ${BANK_VERSION}.` : `Assessed before question-set versions were recorded (current: ${BANK_VERSION}).`} Re-assess to pick up changed questions and law dates.</p>
+              : <p className="xs mute" style={{ marginTop: 4 }}>Question set {assessment.bank.bank}. {Object.values(assessment.bank.laws || {}).join('; ')}.</p>)}
             {byLaw && <p className="small" style={{ marginTop: 6 }}><b>Set by law, not by the score.</b> The score alone would be {TIERS[scoreBand].label}; {results.legal.reason} sets the tier to {t.label}.</p>}
             {byFloor && <p className="small" style={{ marginTop: 6 }}><b>Set by the severe-risk floor.</b> The score alone would be {TIERS[scoreBand].label}; three or more critical principles are at severe risk.</p>}
             {results.creditSuspended && <p className="small" style={{ marginTop: 6, color: 'var(--bad)' }}><b>Control credit suspended.</b> {(results.signals || []).filter((x) => x.suspends).map((x) => x.text).join('; ')}. The score would be {results.declaredResidual}/100 once resolved.</p>}

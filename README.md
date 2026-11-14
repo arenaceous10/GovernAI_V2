@@ -213,6 +213,69 @@ All four use the product's single model-registry connection (address and a seale
   otherwise from Databricks' lineage endpoint, which is not in its public API reference. Use, classification and
   steward stay as people set them.
 
+**The daily check and the email digest**
+
+`/api/daily` runs once a day on the Vercel schedule (`vercel.json`). It only reads.
+
+- It reads the registry of every connected product from stage 4 on (oldest read first, at most 25 a day, skipping
+  any read in the last 20 hours) to see whether a new version has appeared or the saved token has stopped working.
+  It does not change a product: the app re-reads a registry that was last read more than 12 hours ago when someone
+  opens the product, and applies the result through the same rule as "Check now".
+- It mails each active person a digest, only when something needs them. Client users see their own organisation:
+  a returned stage, actions past due or due within 3 days (high priority), incident reporting clocks with the hours
+  left, automatic evidence that expires within 5 days or has expired, a periodic review due within 14 days, a new
+  model version, a registry token that no longer works. Reviewers and leads see stages waiting for review (and
+  whether the review target is passed), incident clocks and new versions.
+- It is switched off until these server variables exist in Vercel (never in the browser build):
+
+| Variable | What it is |
+| --- | --- |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key. Needed because the job reads across organisations. |
+| `CRON_SECRET` | Any random text of 16 characters or more. Vercel sends it with the scheduled call; nobody else can run the job. |
+| `RESEND_API_KEY`, `DIGEST_FROM` | Optional, for the emails. A Resend key and a sender such as `GovernAI <no-reply@yourdomain>`. Resend's free plan sends 100 emails a day and needs a domain you own; without a verified domain it only delivers to the Resend account's own address. |
+| `APP_URL` | Optional. The address put in the email's "Open GovernAI" link. |
+
+`/api/health` reports `dailyCheck` and `emailDigest` as true or false.
+
+**New model versions: minor or material**
+
+- Minor: the same training code, the same parameters, the same training tables (newer rows of the same tables are
+  fine) and no metric more than 2% worse. Everything else is material, including a version whose training details
+  the registry does not hold.
+- A material change in production opens change review (stage 8) as before, and the reasons are written into the
+  change. A minor change opens no round: it shows on the AI card and a reviewer or lead accepts it in one step. Until
+  then it counts as a version nobody has approved (control credit stays suspended). The rule is checked again at
+  acceptance. Settings has a switch to send every change through change review.
+- Each approval keeps the version's training details, so a later version can be compared with it even after the
+  registry stops returning them.
+
+**Models with no product**
+
+"Find models with no product" on the AI card lists every registered model the saved token can see and shows those
+that no GovernAI product is connected to (same workspace; withdrawn and retired products do not count).
+
+**Least-privilege access for the Databricks token**
+
+Create a service principal, give it a token, and grant only what is read (replace the names):
+
+```sql
+GRANT USE CATALOG ON CATALOG main TO `governai-reader`;
+GRANT USE SCHEMA ON SCHEMA main.claims TO `governai-reader`;
+GRANT EXECUTE ON FUNCTION main.claims.triage TO `governai-reader`;          -- the registered model
+GRANT SELECT ON TABLE main.claims.inference_profile_metrics TO `governai-reader`;  -- monitoring tables
+GRANT USE CATALOG ON CATALOG system TO `governai-reader`;                    -- lineage and column tags
+GRANT USE SCHEMA ON SCHEMA system.access TO `governai-reader`;
+GRANT SELECT ON TABLE system.access.table_lineage TO `governai-reader`;
+```
+
+Also give it "Can use" on one SQL warehouse. These are a starting point: check each statement against your workspace and the current Databricks privilege reference before running it.
+
+**Question set version**
+
+Each assessment records the question set it answered (`BANK_VERSION` in `src/engine/governance.js`, raised by hand
+when fixed questions or a law's dates change) and the law texts in force. An assessment on an older set is labelled
+on the Risk and score tab.
+
 **Lineage built from Databricks (Data and lineage tab)**
 
 - One click, "Build lineage from Databricks", no table names typed. The walk starts from the tables the model

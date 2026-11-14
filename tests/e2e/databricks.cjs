@@ -53,6 +53,14 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
     assert(/Version 3 compared with version 2/.test(t) && /f1 0\.75 to 0\.71 \(lower\)/.test(t) && /max_depth 4 to 6/.test(t) && /different data version/.test(t), 'comparison with the previous version');
     assert(row(ID).data.connector.versions[0].run.code.commit === '1a2b3c4d5e6f7a8b', 'run details stored with the connection');
 
+    // 1b. models in the workspace that have no product
+    db.registryModels = [{ name: 'main.claims.triage', owner: 'ml-platform' }, { name: 'main.claims.fraud_score', owner: 'fraud-team' }, { name: 'main.hr.cv_screening', owner: 'hr-analytics' }];
+    await p.getByRole('button', { name: /Find models with no product/ }).click(); await W(900);
+    t = await body();
+    assert(/2 of 3 registered models have no product in GovernAI/.test(t), 'unregistered models counted');
+    assert(t.includes('main.claims.fraud_score') && t.includes('main.hr.cv_screening'), 'unregistered models listed');
+    assert(!/main\.claims\.triage\s*·\s*ml-platform/.test(t), 'the connected model is not listed as unregistered');
+
     // 2. lifecycle: evidence can be attached from Databricks, marked with its read date
     await p.goto(URL + '#product--' + ID); await W(800);
     await p.getByRole('tab', { name: 'Lifecycle' }).click(); await W(500);
@@ -162,6 +170,7 @@ const assert = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); };
     assert(await days.count() === 1, 'setting on the settings page');
     await days.fill('7'); await days.blur(); await W(600);
     assert(db.tables.v2_settings.some((x) => JSON.stringify(x).includes('"autoEvidenceDays":7')), 'the limit is saved');
+    assert(await p.getByLabel('Accept minor changes without a change review round').isChecked(), 'minor-change short path is on by default and can be switched off');
 
     assert(!JSON.stringify(db.tables.v2_products).includes('dapi-test-token'), 'raw token never stored');
     assert(errs.length === 0, 'no page errors: ' + errs.join(' | '));

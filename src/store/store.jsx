@@ -11,6 +11,7 @@ import { requiredApprovals, nextStage, stageOf, ROLES } from '../data/lifecycle.
 import { TIERS, SELECTABLE_FRAMEWORKS } from '../data/frameworks.js';
 import { rescore, buildActions, controlGaps, effectiveAnswers, isStaged, isProvisional, scoringOf } from '../engine/engine.js';
 import { cleanLineage } from '../engine/lineage.js';
+import { changeMateriality, baselineVersion, bankStamp, versionCovered } from '../engine/governance.js';
 import { breachSignals, goLiveBlockers, conditionAction, approvedVersionEntry, bulkTickable, autoEvidence, autoMaxAge, INCIDENT_SEVERITY, SERIOUS_KINDS } from '../engine/governance.js';
 import { LEVEL_NAMES } from '../data/questionBank.js';
 import { buildControlQuestions } from '../lib/buildQuestions.js';
@@ -447,6 +448,8 @@ export function StoreProvider({ children, standalone = null }) {
           const exists = s.systems.some((x) => x.id === newId);
           const prev = exists ? s.systems.find((x) => x.id === newId) : blank(s, newId);
           if (exists && (prev.clientId !== s.clientOrg || ARCHIVED.includes(prev.status))) return s;
+          // The assessment records which version of the question bank and of each law's text it answered.
+          assessment = { ...assessment, bank: bankStamp() };
           const r = assessment.results;
           const live = prev.stage >= 7 && prev.stages?.[6]?.status === 'approved';
           const first = !prev.assessment;
@@ -713,25 +716,45 @@ export function StoreProvider({ children, standalone = null }) {
         const dr = result.monitoring?.drift;
         const driftNew = dr?.drifted?.length > 0 && dr.windowEnd && dr.windowEnd !== x0.connector.monitoring?.drift?.windowEnd
           && !(x0.connector.alerts || []).some((a) => a.kind === 'drift' && a.windowEnd === dr.windowEnd);
-        const canRaise = CAN.raiseEvent(state.role) && x0.stage === 7 && x0.status === 'In production';
+        // A minor change (same code, parameters and tables, no metric worse than the tolerance) does not open a change
+        // review round: it waits for the governance team to accept it in one step. Until then it counts as a version
+        // nobody has approved. The administrator can switch this short path off.
+        const mat = fresh ? changeMateriality({ versions: result.versions || [] }, baselineVersion(x0, result.latest), result.latest, { approved: x0.approvedVersions || [] }) : null;
+        const minor = !!mat && mat.level === 'minor' && state.settings.minorChangeFastTrack !== false;
+        const canRaise = CAN.raiseEvent(state.role) && x0.stage === 7 && x0.status === 'In production' && !minor;
         updateSystem(id, (x, s) => { const out = (() => {
           if (!x.connector) return x;
           let c = { ...x.connector, info: result.info || x.connector.info || null, versions: (result.versions || []).slice(0, 50), latest: result.latest || null, lastSync: nowIso(),
             genai: result.genai || null, monitoring: result.monitoring || null };
           if (driftNew) c = { ...c, alerts: [...(c.alerts || []), { kind: 'drift', at: nowIso(), windowEnd: dr.windowEnd, columns: dr.drifted.map((d) => d.column).slice(0, 10) }].slice(-20) };
           if (!fresh) return { ...x, connector: { ...c, seenVersion: c.seenVersion || result.latest || null } };
-          const alert = { at: nowIso(), version: String(result.latest), from: String(x.connector.seenVersion), raised: canRaise };
+          const alert = { at: nowIso(), version: String(result.latest), from: String(x.connector.seenVersion), raised: canRaise, level: mat?.level || 'material', reasons: (mat?.reasons || []).slice(0, 6) };
           const y = { ...x, updatedAt: nowIso(), connector: { ...c, seenVersion: String(result.latest), alerts: [...(c.alerts || []), alert].slice(-20) } };
           if (!canRaise) return y;
-          const text = `New model version ${result.latest} registered in ${c.model} (was ${x.connector.seenVersion}). Review the change before it is used.`;
+          const text = `New model version ${result.latest} registered in ${c.model} (was ${x.connector.seenVersion}). ${mat?.reasons?.length ? `Material change: ${mat.reasons.join('; ')}. ` : ''}Review the change before it is used.`.slice(0, 900);
           return { ...y, stage: 8, rounds: archiveRound(y, 8), stages: { ...y.stages, 8: newStage() }, events: [...(y.events || []), { at: nowIso(), kind: 'change', text, auto: true, version: String(result.latest) }] };
         })();
         // A version nobody has approved yet is a breach signal: re-score so the product shows it straight away.
         return fresh && out !== x ? settle(out, s.settings.cutoffs) : out; }, // A read that finds nothing new is logged too: its date is what auto-verified evidence and checks rest on.
-        fresh ? (canRaise ? 'Change raised' : 'New model version found') : driftNew ? 'Drift detected' : 'Registry checked',
+        fresh ? (canRaise ? 'Change raised' : minor ? 'Minor model change found' : 'New model version found') : driftNew ? 'Drift detected' : 'Registry checked',
         fresh ? `Version ${result.latest} in ${x0.connector.model}` : driftNew ? `${dr.drifted.length} column${dr.drifted.length === 1 ? '' : 's'} drifted in ${result.monitoring.table}: ${dr.drifted.map((d) => d.column).slice(0, 5).join(', ')}`
           : `${x0.connector.model}: ${result.latest ? `version ${result.latest}` : 'no version'}, nothing new`);
-        return fresh ? (canRaise ? 'raised' : 'found') : driftNew ? 'drift' : 'same';
+        return fresh ? (canRaise ? 'raised' : minor ? 'minor' : 'found') : driftNew ? 'drift' : 'same';
+      },
+      // The governance team accepts a minor change without a change review round. The version joins the approved
+      // list with its training details; the rule is checked again here, so a material change can never take this path.
+      acceptMinorVersion: (id, version) => {
+        if (!CAN.review(state.role)) return 'Only the governance team can accept a change';
+        const x = state.systems.find((y) => y.id === id);
+        const alert = (x?.connector?.alerts || []).find((a) => a.kind !== 'drift' && String(a.version) === String(version));
+        if (!x || !alert) return 'There is no change waiting for this version';
+        const mat = changeMateriality(x.connector, alert.from ?? baselineVersion(x, version), version, { approved: x.approvedVersions || [] });
+        if (mat.level !== 'minor') return `Version ${version} is not a minor change: ${mat.reasons.join('; ')}. Raise a change instead.`;
+        if (x.stage !== 7 || versionCovered(x, alert)) return 'There is no change waiting for this version';
+        const v = (x.connector.versions || []).find((o) => String(o.version) === String(version));
+        updateSystem(id, (y, s) => settle({ ...y, updatedAt: nowIso(), approvedVersions: [...(y.approvedVersions || []), { version: String(version), at: nowIso(), stage: 7, source: 'registry', minor: true, by: s.me?.name || s.role, ...(v?.run ? { metrics: v.metrics || {}, run: v.run } : {}) }].slice(-50) }, s.settings.cutoffs),
+          'Minor change accepted', `Version ${version} of ${x.connector.model}: same code, parameters and training tables, no metric worse than the tolerance`);
+        return '';
       },
       // New action, by the client or as a requirement from the governance team (e.g. on a control gap).
       addAction: (id, a) => {

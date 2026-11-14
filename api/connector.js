@@ -4,12 +4,13 @@
 //   { action: 'sync', productId }                              -> registry read with the product's sealed token, plus
 //                                                                 GenAI evaluations and traces, and production monitoring
 //   { action: 'tables', productId, tables: [...] }             -> Unity Catalog tables: owner, columns, lineage, monitor
+//   { action: 'models', productId }                            -> every registered model the saved token can see
 //   { action: 'lineage', productId, roots: [...] }             -> lineage walked upstream from those tables, every layer
 // The product is read with the caller's own Supabase token (row-level security), so nobody can use another
 // organisation's connection. Clients and admins may connect a model; the governance team may also sync.
 import { signedIn, readBody } from '../src/lib/serverAuth.js';
 import { registryOpen, REGISTRY_CLOSED_TEXT } from '../src/lib/registryStage.js';
-import { seal, unseal, readRegistry, readGenAI, readMonitoring, readTables, walkLineage, validWarehouse, checkHost } from '../src/lib/server/connector.js';
+import { seal, unseal, readFull, listModels, readTables, walkLineage, validWarehouse, checkHost } from '../src/lib/server/connector.js';
 
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
@@ -36,20 +37,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ sealed: seal(t, id, keyB64) });
     }
     // Registry, then (best effort, in parallel) GenAI evaluations and traces, and production monitoring.
-    const full = async (c, token) => {
-      const reg = await readRegistry({ kind: c.kind, host: c.host, model: c.model, token }, opts);
-      const wh = validWarehouse(c.warehouseId) ? String(c.warehouseId).trim() : '';
-      const [genai, monitoring] = await Promise.allSettled([
-        readGenAI({ base: reg.base, token, experiment: c.experiment, versions: reg.versions }),
-        c.kind === 'databricks-uc' && c.monitorTable ? readMonitoring({ base: reg.base, token, table: c.monitorTable, warehouseId: wh }) : Promise.resolve(null),
-      ]);
-      const { base, ...rest } = reg; void base;
-      return {
-        ...rest,
-        genai: genai.status === 'fulfilled' ? genai.value : { notes: [genai.reason?.message || 'Evaluations could not be read'] },
-        monitoring: monitoring.status === 'fulfilled' ? monitoring.value : { table: c.monitorTable, notes: [monitoring.reason?.message || 'Monitoring could not be read'] },
-      };
-    };
+    const full = (c, token) => readFull(c, token, opts);
     const savedToken = (c) => {
       if (!c.tokenSealed) return '';
       try { return unseal(c.tokenSealed, id, keyB64); } catch { return null; }
@@ -75,6 +63,13 @@ export default async function handler(req, res) {
       const wh = validWarehouse(c.warehouseId) ? String(c.warehouseId).trim() : '';
       const tables = Array.isArray(body.tables) ? body.tables.slice(0, 20) : [];
       return res.status(200).json(await readTables({ base, token, tables, warehouseId: wh }));
+    }
+    if (body.action === 'models') {
+      const c = row.data?.connector;
+      if (!c?.host) return res.status(400).json({ error: 'This product has no model connection' });
+      const token = savedToken(c);
+      if (token === null) return res.status(400).json({ error: 'The saved token cannot be used. Connect the model again.' });
+      return res.status(200).json(await listModels({ kind: c.kind, host: c.host, token }, opts));
     }
     if (body.action === 'lineage') {
       const c = row.data?.connector;

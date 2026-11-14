@@ -337,6 +337,10 @@ function installApi(context, db) {
       if (row.data?.connector?.kind !== 'databricks-uc') return send(route, 400, { error: 'Connect the model to Databricks Unity Catalog on the AI card first' });
       return send(route, 200, { tables: (body.tables || []).map((n) => db.ucTables?.[n] || { name: n, error: `Table ${n} was not found, or the token cannot read it` }), notes: [] });
     }
+    if (body.action === 'models') {
+      if (!row.data?.connector?.host) return send(route, 400, { error: 'This product has no model connection' });
+      return send(route, 200, { models: db.registryModels || [], truncated: false });
+    }
     if (body.action === 'lineage') {
       if (row.data?.connector?.kind !== 'databricks-uc') return send(route, 400, { error: 'Connect the model to Databricks Unity Catalog on the AI card first' });
       db.lineageCalls = [...(db.lineageCalls || []), body.roots];

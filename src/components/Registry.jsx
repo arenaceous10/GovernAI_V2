@@ -1,6 +1,6 @@
 // Model registry panel on the AI card: connect MLflow or Databricks Unity Catalog with a read-only token, see the
 // registered versions and their metrics, and turn a new version into a change review.
-import { pendingVersions, compareMetrics, cardVersion, trainingTables, versionDiff, pullState, autoMaxAge } from '../engine/governance.js';
+import { pendingVersions, compareMetrics, cardVersion, trainingTables, versionDiff, pullState, autoMaxAge, unregisteredModels } from '../engine/governance.js';
 import { registryVersion } from '../data/card.js';
 import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertTriangle, CheckCircle2, ChevronDown, FlaskConical, Link2, Loader2, PlugZap, RefreshCw, Settings2, Unplug } from 'lucide-react';
@@ -20,6 +20,7 @@ export async function syncProduct(store, s, { quiet = false } = {}) {
   const outcome = store.applyModelSync(s.id, res);
   if (!quiet || outcome !== 'same') {
     toast(outcome === 'raised' ? `New version ${res.latest} found: change review opened (stage 8)`
+      : outcome === 'minor' ? `New version ${res.latest} found: a minor change, waiting for the governance team to accept it`
       : outcome === 'found' ? `New version ${res.latest} found in the registry`
         : outcome === 'drift' ? `Drift detected in ${res.monitoring?.table}: ${res.monitoring?.drift?.drifted?.length} column(s)`
         : 'Registry checked: no new version', outcome === 'same' ? 'good' : 'warn');
@@ -29,7 +30,14 @@ export async function syncProduct(store, s, { quiet = false } = {}) {
 
 export default function RegistryPanel({ s }) {
   const store = useStore();
-  const { role, connectModel, disconnectModel, setConnectorConfig } = store;
+  const { role, connectModel, disconnectModel, setConnectorConfig, acceptMinorVersion } = store;
+  const [others, setOthers] = useState(null);
+  const findOthers = async () => {
+    setBusy('models');
+    try { const r = await callApi('/api/connector', { action: 'models', productId: s.id }); setOthers({ ...r, list: unregisteredModels(r.models, store.state.systems, s.connector.host) }); }
+    catch (e) { toast(`Could not list the models: ${e.message}`, 'warn'); }
+    finally { setBusy(''); }
+  };
   const [cfg, setCfg] = useState(null);
   const c = s.connector;
   const open = registryOpen(s);
@@ -119,7 +127,10 @@ export default function RegistryPanel({ s }) {
           {underReview && <div className="verdict"><AlertTriangle size={18} aria-hidden /><div className="small"><b>Version {underReview.version} is under change review (stage 8)</b> It clears here once the change is approved.</div></div>}
           {alerts.map((a) => (
             <div key={a.at} className="verdict warn"><AlertTriangle size={18} aria-hidden /><div className="small"><b>Version {a.version} found on {fmtDate(a.at)}</b> (was {a.from}).
-              {s.stage === 7 && s.status === 'In production' ? ' Raise a change on the lifecycle tab to review it before it is used.' : ' It is recorded here and in the change history.'}</div></div>
+              {a.level === 'minor' ? <> <b>Minor change:</b> the same code, parameters and training tables, and no metric worse than the tolerance. It waits for the governance team to accept it; no change review round is needed.
+                {['assessor', 'lead'].includes(role) && s.stage === 7 && <> <button type="button" className="btn sm" style={{ marginLeft: 6 }} onClick={() => { const e = acceptMinorVersion(s.id, a.version); if (e) toast(e, 'warn'); else toast(`Version ${a.version} accepted`); }}>Accept minor change</button></>}</>
+                : <>{a.reasons?.length > 0 && <> <b>Material change:</b> {a.reasons.join('; ')}.</>}
+                  {s.stage === 7 && s.status === 'In production' ? ' Raise a change on the lifecycle tab to review it before it is used.' : ' It is recorded here and in the change history.'}</>}</div></div>
           ))}
           {(c.versions || []).length > 0 && (
             <table className="table small">
@@ -137,6 +148,18 @@ export default function RegistryPanel({ s }) {
           )}
           {c.lastSync && fresh.expired && <p className="xs mute">The registry was last read more than {maxAge} days ago. Checks and evidence that rely on it are shown as out of date until you click "Check now".</p>}
           <HowMade s={s} />
+          <div className="stack" style={{ borderTop: '1px solid var(--line-2)', paddingTop: 10, gap: 6 }}>
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" className="btn ghost sm" onClick={findOthers} disabled={!!busy}>{busy === 'models' ? <Loader2 size={14} className="spin" /> : <PlugZap size={14} />} Find models with no product</button>
+              <span className="xs mute">Lists every registered model this token can see and shows the ones that are not registered in GovernAI.</span>
+            </div>
+            {others && (others.list.length === 0
+              ? <p className="small" style={{ margin: 0 }}>All {others.models.length} registered model{others.models.length === 1 ? '' : 's'} this token can see {others.models.length === 1 ? 'has' : 'have'} a product here.</p>
+              : <div className="callout warn small"><b>{others.list.length} of {others.models.length} registered model{others.models.length === 1 ? '' : 's'} {others.list.length === 1 ? 'has' : 'have'} no product in GovernAI:</b>
+                <ul className="list-plain mono xs" style={{ margin: '4px 0 0' }}>{others.list.slice(0, 30).map((m) => <li key={m.name}>{m.name}{m.owner ? <span className="mute"> · {m.owner}</span> : null}</li>)}</ul>
+                {(others.list.length > 30 || others.truncated) && <div className="xs mute">The list is cut short.</div>}
+                <div className="xs mute" style={{ marginTop: 4 }}>You see only the products of your own organisation, so a model another organisation registered also appears here. Register each one that is in use under "Register a product".</div></div>)}
+          </div>
           {cfg && (
             <div className="stack" style={{ borderTop: '1px solid var(--line-2)', paddingTop: 10 }}>
               <AdvancedFields v={cfg} set={(p) => setCfg({ ...cfg, ...p })} kind={c.kind} open />

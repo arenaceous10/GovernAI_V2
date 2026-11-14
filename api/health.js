@@ -25,6 +25,8 @@ export default async function handler(req, res) {
       aiQuestions: !!process.env.GEMINI_API_KEY,
       evidenceSigning: !!process.env.EVIDENCE_SIGNING_KEY,
       modelConnector: !!process.env.CONNECTOR_KEY,
+      dailyCheck: !!(process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.CRON_SECRET),
+      emailDigest: !!(process.env.RESEND_API_KEY && process.env.DIGEST_FROM),
     },
     build: process.env.VERCEL_GIT_COMMIT_SHA ? process.env.VERCEL_GIT_COMMIT_SHA.slice(0, 7) : 'local',
   };

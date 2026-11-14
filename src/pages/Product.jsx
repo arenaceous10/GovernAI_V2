@@ -1043,7 +1043,7 @@ export default function Product({ id, nav, back }) {
       <ControlsBanner s={s} nav={nav} />
       <Tabs value={tab} onChange={setTab} tabs={[['lifecycle', 'Lifecycle'], ['overview', 'Risk and score'], ['assessment', 'Assessment'], ['data', 'Data and lineage'], ['actions', `Actions (${open})`], ['history', 'History'], ['record', 'Record']]} />
       <div key={tab} className="fade-in">
-        {tab === 'overview' && <Results results={r} frameworks={s.assessment.frameworks} profile={s.assessment.profile} />}
+        {tab === 'overview' && <Results results={r} frameworks={s.assessment.frameworks} profile={s.assessment.profile} assessment={s.assessment} />}
         {tab === 'lifecycle' && <Lifecycle s={s} />}
         {tab === 'assessment' && <Assessment s={s} nav={nav} />}
         {tab === 'data' && <DataTab s={s} />}

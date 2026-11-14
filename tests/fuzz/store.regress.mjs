@@ -262,5 +262,46 @@ await check('lineage read from Databricks is stored cut to size, logged, and mar
   await run(() => { err = api().saveLineage(p.id, raw); });
   assert.match(err, /Only the client/);
 });
+await check('a minor new version waits for a one-click acceptance by the governance team; a material one opens change review', async () => {
+  await as('admin'); await run(() => api().resetDemo());
+  const p = api().state.systems.find((x) => x.status === 'In production' && x.stage === 7);
+  assert.ok(p, 'a product in production');
+  const run2 = { code: { commit: 'aaa' }, params: { depth: '6' }, datasets: [{ table: 'a.b.t', digest: 'd1' }] };
+  const v = (n, metrics, run = run2) => ({ version: String(n), metrics, run });
+  await as('client', p.clientId);
+  await run(() => api().connectModel(p.id, { kind: 'mlflow', host: 'https://mlflow.example.com', model: 'triage', tokenSealed: 'v1.x', result: { latest: '2', versions: [v(2, { auc: 0.9 })] } }));
+  // minor: same code, parameters and tables, metric not worse
+  let out; await run(() => { out = api().applyModelSync(p.id, { latest: '3', versions: [v(3, { auc: 0.91 }), v(2, { auc: 0.9 })] }); });
+  assert.equal(out, 'minor');
+  assert.equal(sys(p.id).stage, 7, 'no change review round is opened');
+  assert.equal(sys(p.id).connector.alerts.at(-1).level, 'minor');
+  assert.ok((sys(p.id).assessment.results.signals || []).some((g) => g.id === 'version'), 'it still counts as not yet approved');
+  let err; await run(() => { err = api().acceptMinorVersion(p.id, '3'); });
+  assert.match(err, /governance team/);
+  await as('assessor');
+  await run(() => { err = api().acceptMinorVersion(p.id, '3'); });
+  assert.equal(err, '');
+  const e = sys(p.id).approvedVersions.at(-1);
+  assert.equal(e.version, '3'); assert.equal(e.minor, true); assert.equal(e.run.code.commit, 'aaa');
+  assert.ok(!(sys(p.id).assessment.results.signals || []).some((g) => g.id === 'version'), 'the signal clears');
+  assert.ok(api().state.audit.some((a) => a.action === 'Minor change accepted'));
+  // material: the code changed
+  await as('client', p.clientId);
+  await run(() => { out = api().applyModelSync(p.id, { latest: '4', versions: [v(4, { auc: 0.91 }, { ...run2, code: { commit: 'bbb' } }), v(3, { auc: 0.91 })] }); });
+  assert.equal(out, 'raised'); assert.equal(sys(p.id).stage, 8);
+  assert.match(sys(p.id).events.at(-1).text, /training code changed/i);
+  // a material version can never be accepted with one click
+  await as('assessor');
+  await run(() => { err = api().acceptMinorVersion(p.id, '4'); });
+  assert.match(err, /not a minor change/);
+  // the administrator can switch the short path off
+  await as('admin'); await run(() => api().resetDemo()); await run(() => api().setSetting('minorChangeFastTrack', false));
+  const q = api().state.systems.find((x) => x.status === 'In production' && x.stage === 7);
+  await as('client', q.clientId);
+  await run(() => api().connectModel(q.id, { kind: 'mlflow', host: 'https://mlflow.example.com', model: 'triage', tokenSealed: 'v1.x', result: { latest: '2', versions: [v(2, { auc: 0.9 })] } }));
+  await run(() => { out = api().applyModelSync(q.id, { latest: '3', versions: [v(3, { auc: 0.91 }), v(2, { auc: 0.9 })] }); });
+  assert.equal(out, 'raised');
+  await as('admin'); await run(() => api().setSetting('minorChangeFastTrack', true));
+});
 console.log(JSON.stringify(results, null, 1));
 process.exit(results.every((x) => x.ok) ? 0 : 1);
